@@ -3,6 +3,11 @@ import { prisma } from '../lib/prisma/client.js';
 
 const router = Router();
 
+// Helper para formatar data no timezone de Brasília (-03:00)
+function formatDateToBrasilia(date: Date): string {
+  return date.toLocaleString('sv-SE', { timeZone: 'America/Sao_Paulo' }).replace(' ', 'T') + '-03:00';
+}
+
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
@@ -50,12 +55,12 @@ router.get('/', async (req, res) => {
     const eventosComParticipantes = eventos.map(evento => ({
       id: evento.id,
       nome: evento.nome,
-      data_inicio: evento.data_inicio,
-      data_fim: evento.data_fim,
+      data_inicio: formatDateToBrasilia(evento.data_inicio),
+      data_fim: formatDateToBrasilia(evento.data_fim),
       descricao: evento.descricao,
       userId: evento.userId,
-      createdAt: evento.createdAt,
-      updatedAt: evento.updatedAt,
+      createdAt: formatDateToBrasilia(evento.createdAt),
+      updatedAt: formatDateToBrasilia(evento.updatedAt),
       quantidadeParticipantes: evento._count.participantes
     }));
 
@@ -81,7 +86,15 @@ router.get('/:id', async (req, res) => {
       });
     }
 
-    res.json(evento);
+    const eventoFormatado = {
+      ...evento,
+      data_inicio: formatDateToBrasilia(evento.data_inicio),
+      data_fim: formatDateToBrasilia(evento.data_fim),
+      createdAt: formatDateToBrasilia(evento.createdAt),
+      updatedAt: formatDateToBrasilia(evento.updatedAt),
+    };
+
+    res.json(eventoFormatado);
   } catch (error) {
     console.error('Erro ao buscar evento:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
