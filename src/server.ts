@@ -20,6 +20,12 @@ app.use(express.json());
 
 app.use('/eventos', eventosRoutes);
 
-app.listen(3000, () => {
-  console.log('Server is running on port 3000');
-});
+// Para desenvolvimento local
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(3000, () => {
+    console.log('Server is running on port 3000');
+  });
+}
+
+// Export para Vercel
+export default app;
