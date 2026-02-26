@@ -10,8 +10,7 @@ app.use(
     origin: [
       'http://localhost:3000',
       'http://localhost:3001',
-      'saaschurch-new.vercel.app',
-      'saaschurch-d08mh64ci-rezucherattos-projects.vercel.app',
+      'https://saaschurch-new.vercel.app',
     ],
     credentials: true,
   }),
