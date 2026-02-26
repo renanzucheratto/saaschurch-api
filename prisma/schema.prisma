@@ -6,14 +6,31 @@ datasource db {
   provider = "postgresql"
 }
 
-model EventosProvisorio {
-  id          String   @id @default(uuid())
-  nome        String
-  email       String   @unique
-  telefone    String
-  aceite_termo Boolean
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
+model Eventos {
+  id            String   @id @default(uuid())
+  nome          String
+  data          DateTime
+  descricao     String?
+  userId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  participantes Participantes[]
 
-  @@map("eventos_provisorio")
+  @@map("eventos")
+}
+
+model Participantes {
+  id             String   @id @default(uuid())
+  eventoId       String
+  nome           String
+  email          String
+  telefone       String
+  termo_assinado Boolean
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  
+  evento         Eventos  @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+
+  @@map("participantes")
 }

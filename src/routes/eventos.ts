@@ -3,34 +3,23 @@ import { prisma } from '../lib/prisma/client.js';
 
 const router = Router();
 
-// POST /eventos - Adicionar evento
+// POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
-    const { nome, email, telefone, aceite_termo } = req.body;
+    const { nome, data, descricao } = req.body;
 
-    // Validação básica
-    if (!nome || !email || !telefone || aceite_termo === undefined) {
+    if (!nome || !data) {
       return res.status(400).json({
-        error: 'Campos obrigatórios: nome, email, telefone, aceite_termo'
+        error: 'Campos obrigatórios: nome, data'
       });
     }
 
-    const exists = await prisma.eventosProvisorio.findUnique({
-      where: { email }
-    })
-
-    if (exists) {
-      return res.status(409).json({
-        error: 'Usuário já cadastrado'
-      });
-    }
-
-    const evento = await prisma.eventosProvisorio.create({
+    const evento = await prisma.eventos.create({
       data: {
         nome,
-        email,
-        telefone,
-        aceite_termo
+        data: new Date(data),
+        descricao: descricao || null,
+        userId: null
       }
     });
 
@@ -39,104 +28,108 @@ router.post('/', async (req, res) => {
     console.error('Erro ao criar evento:', error);
     res.status(500).json({ 
       error: 'Erro interno do servidor',
-      details: error?.message,       // temporariamente expor em prod
-      code: error?.code,             // código do erro do Prisma/pg
+      details: error?.message,
+      code: error?.code,
     });
   }
 });
 
-// GET /eventos - Listar todos os eventos
+// GET /eventos - Listar eventos com quantidade de participantes
 router.get('/', async (req, res) => {
   try {
-    const eventos = await prisma.eventosProvisorio.findMany({
-      orderBy: { created_at: 'desc' }
+    const eventos = await prisma.eventos.findMany({
+      orderBy: { data: 'desc' },
+      include: {
+        _count: {
+          select: { participantes: true }
+        }
+      }
     });
-    res.json(eventos);
+
+    const eventosComParticipantes = eventos.map(evento => ({
+      id: evento.id,
+      nome: evento.nome,
+      data: evento.data,
+      descricao: evento.descricao,
+      userId: evento.userId,
+      createdAt: evento.createdAt,
+      updatedAt: evento.updatedAt,
+      quantidadeParticipantes: evento._count.participantes
+    }));
+
+    res.json(eventosComParticipantes);
   } catch (error) {
     console.error('Erro ao listar eventos:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
 
-// DELETE /eventos/limpar-duplicados - Remover emails duplicados (temporário)
-router.delete('/limpar-duplicados', async (req, res) => {
+// POST /eventos/:eventoId/participantes - Criar participante
+router.post('/:eventoId/participantes', async (req, res) => {
   try {
-    // Encontrar emails duplicados
-    const duplicados = await prisma.$queryRaw<Array<{ email: string; count: number }>>`
-      SELECT email, COUNT(*) as count
-      FROM eventos_provisorio
-      GROUP BY email
-      HAVING COUNT(*) > 1
-    `;
-    
-    let totalRemovidos = 0;
-    
-    // Para cada email duplicado, manter apenas o mais antigo
-    for (const dup of duplicados) {
-      const registros = await prisma.eventosProvisorio.findMany({
-        where: { email: dup.email },
-        orderBy: { created_at: 'asc' }
+    const { eventoId } = req.params;
+    const { nome, email, telefone, termo_assinado } = req.body;
+
+    if (!nome || !email || !telefone || termo_assinado === undefined) {
+      return res.status(400).json({
+        error: 'Campos obrigatórios: nome, email, telefone, termo_assinado'
       });
-      
-      // Remover todos exceto o primeiro (mais antigo)
-      const paraRemover = registros.slice(1);
-      for (const registro of paraRemover) {
-        await prisma.eventosProvisorio.delete({
-          where: { id: registro.id }
-        });
-        totalRemovidos++;
-      }
     }
-    
-    res.json({ 
-      message: `Removidos ${totalRemovidos} registros duplicados`,
-      duplicadosEncontrados: duplicados.length,
-      instructions: "Agora emails duplicados não podem mais ser criados devido à constraint unique no banco."
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id: eventoId }
     });
-  } catch (error) {
-    console.error('Erro ao limpar duplicados:', error);
-    res.status(500).json({ error: 'Erro interno do servidor' });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const participante = await prisma.participantes.create({
+      data: {
+        eventoId,
+        nome,
+        email,
+        telefone,
+        termo_assinado
+      }
+    });
+
+    res.status(201).json(participante);
+  } catch (error: any) {
+    console.error('Erro ao criar participante:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
   }
 });
 
-// GET /eventos/limpar-duplicados - Remover emails duplicados (versão GET para facilitar acesso)
-router.get('/limpar-duplicados', async (req, res) => {
+// GET /eventos/:eventoId/participantes - Listar participantes do evento
+router.get('/:eventoId/participantes', async (req, res) => {
   try {
-    // Encontrar emails duplicados
-    const duplicados = await prisma.$queryRaw<Array<{ email: string; count: number }>>`
-      SELECT email, COUNT(*) as count
-      FROM eventos_provisorio
-      GROUP BY email
-      HAVING COUNT(*) > 1
-    `;
-    
-    let totalRemovidos = 0;
-    
-    // Para cada email duplicado, manter apenas o mais antigo
-    for (const dup of duplicados) {
-      const registros = await prisma.eventosProvisorio.findMany({
-        where: { email: dup.email },
-        orderBy: { created_at: 'asc' }
-      });
-      
-      // Remover todos exceto o primeiro (mais antigo)
-      const paraRemover = registros.slice(1);
-      for (const registro of paraRemover) {
-        await prisma.eventosProvisorio.delete({
-          where: { id: registro.id }
-        });
-        totalRemovidos++;
-      }
-    }
-    
-    res.json({ 
-      success: true,
-      message: `Removidos ${totalRemovidos} registros duplicados`,
-      duplicadosEncontrados: duplicados.length,
-      instructions: "Agora emails duplicados não podem mais ser criados devido à constraint unique no banco."
+    const { eventoId } = req.params;
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id: eventoId }
     });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const participantes = await prisma.participantes.findMany({
+      where: { eventoId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json(participantes);
   } catch (error) {
-    console.error('Erro ao limpar duplicados:', error);
+    console.error('Erro ao listar participantes:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
