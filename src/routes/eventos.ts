@@ -15,6 +15,16 @@ router.post('/', async (req, res) => {
       });
     }
 
+    const exists = await prisma.eventosProvisorio.findUnique({
+      where: { email }
+    })
+
+    if (exists) {
+      return res.status(409).json({
+        error: 'Usuário já cadastrado'
+      });
+    }
+
     const evento = await prisma.eventosProvisorio.create({
       data: {
         nome,
@@ -26,13 +36,6 @@ router.post('/', async (req, res) => {
 
     res.status(201).json(evento);
   } catch (error: any) {
-    // Tratar erro de constraint unique (email duplicado)
-    if (error?.code === 'P2002') {
-      return res.status(409).json({
-        error: 'Usuário já cadastrado'
-      });
-    }
-    
     console.error('Erro ao criar evento:', error);
     res.status(500).json({ 
       error: 'Erro interno do servidor',
