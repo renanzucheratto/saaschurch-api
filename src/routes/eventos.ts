@@ -22,7 +22,7 @@ router.post('/', async (req, res) => {
 
     if (eventoExistente) {
       return res.status(409).json({
-        error: 'Email já cadastrado. Este usuário já foi registrado.'
+        error: 'Usuário já cadastrado'
       });
     }
 
@@ -36,17 +36,22 @@ router.post('/', async (req, res) => {
     });
 
     res.status(201).json(evento);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Erro ao criar evento:', error);
+    console.error('Error code:', error?.code);
+    console.error('Error message:', error?.message);
     
     // Tratar erro de constraint unique
-    if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+    if (error?.code === 'P2002') {
       return res.status(409).json({
-        error: 'Email já cadastrado. Este usuário já foi registrado.'
+        error: 'Usuário já cadastrado'
       });
     }
     
-    res.status(500).json({ error: 'Erro interno do servidor' });
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: process.env['NODE_ENV'] === 'development' ? error?.message : undefined
+    });
   }
 });
 
