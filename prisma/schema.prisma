@@ -1,0 +1,19 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model EventosProvisorio {
+  id          String   @id @default(uuid())
+  nome        String
+  email       String
+  telefone    String
+  aceite_termo Boolean
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("eventos_provisorio")
+}
