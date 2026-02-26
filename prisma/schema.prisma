@@ -9,7 +9,7 @@ datasource db {
 model EventosProvisorio {
   id          String   @id @default(uuid())
   nome        String
-  email       String
+  email       String   @unique
   telefone    String
   aceite_termo Boolean
   created_at  DateTime @default(now())
