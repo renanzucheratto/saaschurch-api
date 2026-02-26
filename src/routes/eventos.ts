@@ -39,7 +39,8 @@ router.post('/', async (req, res) => {
     console.error('Erro ao criar evento:', error);
     res.status(500).json({ 
       error: 'Erro interno do servidor',
-      details: process.env['NODE_ENV'] === 'development' ? error?.message : undefined
+      details: error?.message,       // temporariamente expor em prod
+      code: error?.code,             // código do erro do Prisma/pg
     });
   }
 });
