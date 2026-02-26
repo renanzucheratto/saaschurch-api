@@ -38,6 +38,14 @@ router.post('/', async (req, res) => {
     res.status(201).json(evento);
   } catch (error) {
     console.error('Erro ao criar evento:', error);
+    
+    // Tratar erro de constraint unique
+    if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+      return res.status(409).json({
+        error: 'Email já cadastrado. Este usuário já foi registrado.'
+      });
+    }
+    
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
@@ -87,7 +95,8 @@ router.delete('/limpar-duplicados', async (req, res) => {
     
     res.json({ 
       message: `Removidos ${totalRemovidos} registros duplicados`,
-      duplicadosEncontrados: duplicados.length
+      duplicadosEncontrados: duplicados.length,
+      instructions: "Agora emails duplicados não podem mais ser criados devido à constraint unique no banco."
     });
   } catch (error) {
     console.error('Erro ao limpar duplicados:', error);
