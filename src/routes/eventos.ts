@@ -15,6 +15,17 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // Verificar se email já existe
+    const eventoExistente = await prisma.eventosProvisorio.findFirst({
+      where: { email }
+    });
+
+    if (eventoExistente) {
+      return res.status(409).json({
+        error: 'Email já cadastrado. Este usuário já foi registrado.'
+      });
+    }
+
     const evento = await prisma.eventosProvisorio.create({
       data: {
         nome,
