@@ -4,6 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  relationMode = "prisma"
 }
 
 model Eventos {
@@ -33,5 +34,6 @@ model Participantes {
   
   evento         Eventos  @relation(fields: [eventoId], references: [id], onDelete: Cascade)
 
+  @@index([eventoId])
   @@map("participantes")
 }
