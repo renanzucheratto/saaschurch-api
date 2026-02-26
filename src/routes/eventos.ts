@@ -66,6 +66,28 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /eventos/:id - Buscar evento por ID com participantes
+router.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id },
+    });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    res.json(evento);
+  } catch (error) {
+    console.error('Erro ao buscar evento:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 // POST /eventos/:eventoId/participantes - Criar participante
 router.post('/:eventoId/participantes', async (req, res) => {
   try {
