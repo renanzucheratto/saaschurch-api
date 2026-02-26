@@ -8,31 +8,23 @@ router.post('/', async (req, res) => {
   try {
     const { nome, email, telefone, aceite_termo } = req.body;
 
-    console.log('[POST /eventos] Iniciando criação de evento para email:', email);
-
     // Validação básica
     if (!nome || !email || !telefone || aceite_termo === undefined) {
-      console.log('[POST /eventos] Validação falhou - campos obrigatórios ausentes');
       return res.status(400).json({
         error: 'Campos obrigatórios: nome, email, telefone, aceite_termo'
       });
     }
 
-    console.log('[POST /eventos] Verificando se email já existe:', email);
     const exists = await prisma.eventosProvisorio.findUnique({
       where: { email }
-    });
-
-    console.log('[POST /eventos] Resultado da verificação:', exists ? 'Email já existe' : 'Email disponível');
+    })
 
     if (exists) {
-      console.log('[POST /eventos] Email duplicado detectado:', email);
       return res.status(409).json({
         error: 'Usuário já cadastrado'
       });
     }
 
-    console.log('[POST /eventos] Criando novo evento para:', email);
     const evento = await prisma.eventosProvisorio.create({
       data: {
         nome,
@@ -42,11 +34,9 @@ router.post('/', async (req, res) => {
       }
     });
 
-    console.log('[POST /eventos] Evento criado com sucesso:', evento.id);
     res.status(201).json(evento);
   } catch (error: any) {
-    console.error('[POST /eventos] Erro ao criar evento:', error);
-    console.error('[POST /eventos] Stack trace:', error?.stack);
+    console.error('Erro ao criar evento:', error);
     res.status(500).json({ 
       error: 'Erro interno do servidor',
       details: process.env['NODE_ENV'] === 'development' ? error?.message : undefined
