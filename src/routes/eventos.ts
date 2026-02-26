@@ -104,4 +104,46 @@ router.delete('/limpar-duplicados', async (req, res) => {
   }
 });
 
+// GET /eventos/limpar-duplicados - Remover emails duplicados (versão GET para facilitar acesso)
+router.get('/limpar-duplicados', async (req, res) => {
+  try {
+    // Encontrar emails duplicados
+    const duplicados = await prisma.$queryRaw<Array<{ email: string; count: number }>>`
+      SELECT email, COUNT(*) as count
+      FROM eventos_provisorio
+      GROUP BY email
+      HAVING COUNT(*) > 1
+    `;
+    
+    let totalRemovidos = 0;
+    
+    // Para cada email duplicado, manter apenas o mais antigo
+    for (const dup of duplicados) {
+      const registros = await prisma.eventosProvisorio.findMany({
+        where: { email: dup.email },
+        orderBy: { created_at: 'asc' }
+      });
+      
+      // Remover todos exceto o primeiro (mais antigo)
+      const paraRemover = registros.slice(1);
+      for (const registro of paraRemover) {
+        await prisma.eventosProvisorio.delete({
+          where: { id: registro.id }
+        });
+        totalRemovidos++;
+      }
+    }
+    
+    res.json({ 
+      success: true,
+      message: `Removidos ${totalRemovidos} registros duplicados`,
+      duplicadosEncontrados: duplicados.length,
+      instructions: "Agora emails duplicados não podem mais ser criados devido à constraint unique no banco."
+    });
+  } catch (error) {
+    console.error('Erro ao limpar duplicados:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 export default router;
