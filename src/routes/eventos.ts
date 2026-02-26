@@ -6,18 +6,19 @@ const router = Router();
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
-    const { nome, data, descricao } = req.body;
+    const { nome, data_inicio, data_fim, descricao } = req.body;
 
-    if (!nome || !data) {
+    if (!nome || !data_inicio || !data_fim) {
       return res.status(400).json({
-        error: 'Campos obrigatórios: nome, data'
+        error: 'Campos obrigatórios: nome, data_inicio, data_fim'
       });
     }
 
     const evento = await prisma.eventos.create({
       data: {
         nome,
-        data: new Date(data),
+        data_inicio: new Date(data_inicio),
+        data_fim: new Date(data_fim),
         descricao: descricao || null,
         userId: null
       }
@@ -38,7 +39,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const eventos = await prisma.eventos.findMany({
-      orderBy: { data: 'desc' },
+      orderBy: { data_inicio: 'desc' },
       include: {
         _count: {
           select: { participantes: true }
@@ -49,7 +50,8 @@ router.get('/', async (req, res) => {
     const eventosComParticipantes = eventos.map(evento => ({
       id: evento.id,
       nome: evento.nome,
-      data: evento.data,
+      data_inicio: evento.data_inicio,
+      data_fim: evento.data_fim,
       descricao: evento.descricao,
       userId: evento.userId,
       createdAt: evento.createdAt,

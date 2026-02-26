@@ -9,7 +9,8 @@ datasource db {
 model Eventos {
   id            String   @id @default(uuid())
   nome          String
-  data          DateTime
+  data_inicio   DateTime
+  data_fim      DateTime
   descricao     String?
   userId        String?
   createdAt     DateTime @default(now())
