@@ -303,14 +303,7 @@ router.get('/:eventoId/participantes', async (req, res) => {
       ...participante,
       createdAt: formatDateToBrasilia(participante.createdAt),
       updatedAt: formatDateToBrasilia(participante.updatedAt),
-      produtos: participante.produtos.map(pp => ({
-        ...pp,
-        valor_pago: parseFloat(pp.valor_pago.toString()),
-        produto: {
-          ...pp.produto,
-          valor: parseFloat(pp.produto.valor.toString())
-        }
-      }))
+      produtos: participante.produtos.map(pp => pp.produtoId)
     }));
 
     res.json(participantesFormatados);
