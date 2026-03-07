@@ -11,7 +11,7 @@ function formatDateToBrasilia(date: Date): string {
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
-    const { nome, data_inicio, data_fim, descricao } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, produtos } = req.body;
 
     if (!nome || !data_inicio || !data_fim) {
       return res.status(400).json({
@@ -25,11 +25,34 @@ router.post('/', async (req, res) => {
         data_inicio: new Date(data_inicio),
         data_fim: new Date(data_fim),
         descricao: descricao || null,
-        userId: null
+        selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : true,
+        userId: null,
+        produtos: produtos ? {
+          create: produtos.map((produto: any) => ({
+            nome: produto.nome,
+            descricao: produto.descricao || null,
+            valor: produto.valor
+          }))
+        } : undefined
+      },
+      include: {
+        produtos: true
       }
     });
 
-    res.status(201).json(evento);
+    const eventoFormatado = {
+      ...evento,
+      data_inicio: formatDateToBrasilia(evento.data_inicio),
+      data_fim: formatDateToBrasilia(evento.data_fim),
+      createdAt: formatDateToBrasilia(evento.createdAt),
+      updatedAt: formatDateToBrasilia(evento.updatedAt),
+      produtos: evento.produtos.map(produto => ({
+        ...produto,
+        valor: parseFloat(produto.valor.toString())
+      }))
+    };
+
+    res.status(201).json(eventoFormatado);
   } catch (error: any) {
     console.error('Erro ao criar evento:', error);
     res.status(500).json({ 
@@ -40,7 +63,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// GET /eventos - Listar eventos com quantidade de participantes
+// GET /eventos - Listar eventos com quantidade de participantes e produtos
 router.get('/', async (req, res) => {
   try {
     const eventos = await prisma.eventos.findMany({
@@ -48,6 +71,14 @@ router.get('/', async (req, res) => {
       include: {
         _count: {
           select: { participantes: true }
+        },
+        produtos: {
+          select: {
+            id: true,
+            nome: true,
+            descricao: true,
+            valor: true
+          }
         }
       }
     });
@@ -58,10 +89,15 @@ router.get('/', async (req, res) => {
       data_inicio: formatDateToBrasilia(evento.data_inicio),
       data_fim: formatDateToBrasilia(evento.data_fim),
       descricao: evento.descricao,
+      selecao_unica_produto: evento.selecao_unica_produto,
       userId: evento.userId,
       createdAt: formatDateToBrasilia(evento.createdAt),
       updatedAt: formatDateToBrasilia(evento.updatedAt),
-      quantidadeParticipantes: evento._count.participantes
+      quantidadeParticipantes: evento._count.participantes,
+      produtos: evento.produtos.map(produto => ({
+        ...produto,
+        valor: parseFloat(produto.valor.toString())
+      }))
     }));
 
     res.json(eventosComParticipantes);
@@ -71,13 +107,23 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /eventos/:id - Buscar evento por ID com participantes
+// GET /eventos/:id - Buscar evento por ID com participantes e produtos
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
     const evento = await prisma.eventos.findUnique({
       where: { id },
+      include: {
+        produtos: {
+          select: {
+            id: true,
+            nome: true,
+            descricao: true,
+            valor: true
+          }
+        }
+      }
     });
 
     if (!evento) {
@@ -92,6 +138,10 @@ router.get('/:id', async (req, res) => {
       data_fim: formatDateToBrasilia(evento.data_fim),
       createdAt: formatDateToBrasilia(evento.createdAt),
       updatedAt: formatDateToBrasilia(evento.updatedAt),
+      produtos: evento.produtos.map(produto => ({
+        ...produto,
+        valor: parseFloat(produto.valor.toString())
+      }))
     };
 
     res.json(eventoFormatado);
@@ -105,21 +155,44 @@ router.get('/:id', async (req, res) => {
 router.post('/:eventoId/participantes', async (req, res) => {
   try {
     const { eventoId } = req.params;
-    const { nome, email, telefone, termo_assinado } = req.body;
+    const { nome, email, telefone, termo_assinado, produtos_selecionados } = req.body;
 
-    if (!nome || !email || !telefone || termo_assinado === undefined) {
+    if (!nome || !email || !telefone || termo_assinado === undefined || !produtos_selecionados || produtos_selecionados.length === 0) {
       return res.status(400).json({
-        error: 'Campos obrigatórios: nome, email, telefone, termo_assinado'
+        error: 'Campos obrigatórios: nome, email, telefone, termo_assinado, produtos_selecionados'
       });
     }
 
     const evento = await prisma.eventos.findUnique({
-      where: { id: eventoId }
+      where: { id: eventoId },
+      include: { produtos: true }
     });
 
     if (!evento) {
       return res.status(404).json({
         error: 'Evento não encontrado'
+      });
+    }
+
+    // Validar se todos os produtos selecionados existem no evento
+    const produtosIds = produtos_selecionados.map((p: any) => p.produtoId);
+    const produtosValidos = await prisma.produtosEvento.findMany({
+      where: {
+        id: { in: produtosIds },
+        eventoId: eventoId
+      }
+    });
+
+    if (produtosValidos.length !== produtos_selecionados.length) {
+      return res.status(400).json({
+        error: 'Um ou mais produtos selecionados não pertencem a este evento'
+      });
+    }
+
+    // Validar seleção única de produto se necessário
+    if (evento.selecao_unica_produto && produtos_selecionados.length > 1) {
+      return res.status(400).json({
+        error: 'Este evento permite apenas a seleção de um produto'
       });
     }
 
@@ -143,11 +216,45 @@ router.post('/:eventoId/participantes', async (req, res) => {
         nome,
         email: email.toLowerCase().trim(),
         telefone,
-        termo_assinado
+        termo_assinado,
+        produtos: {
+          create: produtos_selecionados.map((produto: any) => ({
+            produtoId: produto.produtoId,
+            valor_pago: produto.valor_pago || produtosValidos.find(p => p.id === produto.produtoId)?.valor || 0
+          }))
+        }
+      },
+      include: {
+        produtos: {
+          include: {
+            produto: {
+              select: {
+                id: true,
+                nome: true,
+                descricao: true,
+                valor: true
+              }
+            }
+          }
+        }
       }
     });
 
-    res.status(201).json(participante);
+    const participanteFormatado = {
+      ...participante,
+      createdAt: formatDateToBrasilia(participante.createdAt),
+      updatedAt: formatDateToBrasilia(participante.updatedAt),
+      produtos: participante.produtos.map(pp => ({
+        ...pp,
+        valor_pago: parseFloat(pp.valor_pago.toString()),
+        produto: {
+          ...pp.produto,
+          valor: parseFloat(pp.produto.valor.toString())
+        }
+      }))
+    };
+
+    res.status(201).json(participanteFormatado);
   } catch (error: any) {
     console.error('Erro ao criar participante:', error);
     res.status(500).json({ 
@@ -158,7 +265,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
   }
 });
 
-// GET /eventos/:eventoId/participantes - Listar participantes do evento
+// GET /eventos/:eventoId/participantes - Listar participantes do evento com produtos
 router.get('/:eventoId/participantes', async (req, res) => {
   try {
     const { eventoId } = req.params;
@@ -175,13 +282,287 @@ router.get('/:eventoId/participantes', async (req, res) => {
 
     const participantes = await prisma.participantes.findMany({
       where: { eventoId },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: {
+        produtos: {
+          include: {
+            produto: {
+              select: {
+                id: true,
+                nome: true,
+                descricao: true,
+                valor: true
+              }
+            }
+          }
+        }
+      }
     });
 
-    res.json(participantes);
+    const participantesFormatados = participantes.map(participante => ({
+      ...participante,
+      createdAt: formatDateToBrasilia(participante.createdAt),
+      updatedAt: formatDateToBrasilia(participante.updatedAt),
+      produtos: participante.produtos.map(pp => ({
+        ...pp,
+        valor_pago: parseFloat(pp.valor_pago.toString()),
+        produto: {
+          ...pp.produto,
+          valor: parseFloat(pp.produto.valor.toString())
+        }
+      }))
+    }));
+
+    res.json(participantesFormatados);
   } catch (error) {
     console.error('Erro ao listar participantes:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// POST /eventos/:eventoId/produtos - Criar produto para um evento
+router.post('/:eventoId/produtos', async (req, res) => {
+  try {
+    const { eventoId } = req.params;
+    const { nome, descricao, valor } = req.body;
+
+    if (!nome || valor === undefined) {
+      return res.status(400).json({
+        error: 'Campos obrigatórios: nome, valor'
+      });
+    }
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id: eventoId }
+    });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const produto = await prisma.produtosEvento.create({
+      data: {
+        eventoId,
+        nome,
+        descricao: descricao || null,
+        valor: valor
+      }
+    });
+
+    const produtoFormatado = {
+      ...produto,
+      valor: parseFloat(produto.valor.toString()),
+      createdAt: formatDateToBrasilia(produto.createdAt),
+      updatedAt: formatDateToBrasilia(produto.updatedAt)
+    };
+
+    res.status(201).json(produtoFormatado);
+  } catch (error: any) {
+    console.error('Erro ao criar produto:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
+  }
+});
+
+// POST /eventos/:eventoId/produtos/batch - Criar múltiplos produtos para um evento
+router.post('/:eventoId/produtos/batch', async (req, res) => {
+  try {
+    const { eventoId } = req.params;
+    const { produtos } = req.body;
+
+    if (!produtos || !Array.isArray(produtos) || produtos.length === 0) {
+      return res.status(400).json({
+        error: 'Campo obrigatório: produtos (array não vazio)'
+      });
+    }
+
+    // Validar se todos os produtos têm os campos obrigatórios
+    for (const produto of produtos) {
+      if (!produto.nome || produto.valor === undefined) {
+        return res.status(400).json({
+          error: 'Todos os produtos devem ter: nome, valor'
+        });
+      }
+    }
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id: eventoId }
+    });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const produtosCriados = await prisma.produtosEvento.createMany({
+      data: produtos.map(produto => ({
+        eventoId,
+        nome: produto.nome,
+        descricao: produto.descricao || null,
+        valor: produto.valor
+      }))
+    });
+
+    // Buscar os produtos criados para retornar dados completos
+    const produtosCompleto = await prisma.produtosEvento.findMany({
+      where: {
+        eventoId,
+        nome: {
+          in: produtos.map(p => p.nome)
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: produtos.length
+    });
+
+    const produtosFormatados = produtosCompleto.map(produto => ({
+      ...produto,
+      valor: parseFloat(produto.valor.toString()),
+      createdAt: formatDateToBrasilia(produto.createdAt),
+      updatedAt: formatDateToBrasilia(produto.updatedAt)
+    }));
+
+    res.status(201).json({
+      message: `${produtosCriados.count} produtos criados com sucesso`,
+      produtos: produtosFormatados
+    });
+  } catch (error: any) {
+    console.error('Erro ao criar produtos em lote:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
+  }
+});
+
+// GET /eventos/:eventoId/produtos - Listar produtos de um evento
+router.get('/:eventoId/produtos', async (req, res) => {
+  try {
+    const { eventoId } = req.params;
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id: eventoId }
+    });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const produtos = await prisma.produtosEvento.findMany({
+      where: { eventoId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const produtosFormatados = produtos.map(produto => ({
+      ...produto,
+      valor: parseFloat(produto.valor.toString()),
+      createdAt: formatDateToBrasilia(produto.createdAt),
+      updatedAt: formatDateToBrasilia(produto.updatedAt)
+    }));
+
+    res.json(produtosFormatados);
+  } catch (error) {
+    console.error('Erro ao listar produtos:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// PUT /eventos/:eventoId/produtos/:produtoId - Atualizar produto
+router.put('/:eventoId/produtos/:produtoId', async (req, res) => {
+  try {
+    const { eventoId, produtoId } = req.params;
+    const { nome, descricao, valor } = req.body;
+
+    const produto = await prisma.produtosEvento.findFirst({
+      where: { 
+        id: produtoId,
+        eventoId: eventoId
+      }
+    });
+
+    if (!produto) {
+      return res.status(404).json({
+        error: 'Produto não encontrado neste evento'
+      });
+    }
+
+    const produtoAtualizado = await prisma.produtosEvento.update({
+      where: { id: produtoId },
+      data: {
+        nome: nome !== undefined ? nome : produto.nome,
+        descricao: descricao !== undefined ? descricao : produto.descricao,
+        valor: valor !== undefined ? valor : produto.valor
+      }
+    });
+
+    const produtoFormatado = {
+      ...produtoAtualizado,
+      valor: parseFloat(produtoAtualizado.valor.toString()),
+      createdAt: formatDateToBrasilia(produtoAtualizado.createdAt),
+      updatedAt: formatDateToBrasilia(produtoAtualizado.updatedAt)
+    };
+
+    res.json(produtoFormatado);
+  } catch (error: any) {
+    console.error('Erro ao atualizar produto:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
+  }
+});
+
+// DELETE /eventos/:eventoId/produtos/:produtoId - Excluir produto
+router.delete('/:eventoId/produtos/:produtoId', async (req, res) => {
+  try {
+    const { eventoId, produtoId } = req.params;
+
+    const produto = await prisma.produtosEvento.findFirst({
+      where: { 
+        id: produtoId,
+        eventoId: eventoId
+      }
+    });
+
+    if (!produto) {
+      return res.status(404).json({
+        error: 'Produto não encontrado neste evento'
+      });
+    }
+
+    // Verificar se há participantes usando este produto
+    const participantesComProduto = await prisma.participanteProdutos.findMany({
+      where: { produtoId }
+    });
+
+    if (participantesComProduto.length > 0) {
+      return res.status(400).json({
+        error: 'Não é possível excluir este produto pois já há participantes inscritos'
+      });
+    }
+
+    await prisma.produtosEvento.delete({
+      where: { id: produtoId }
+    });
+
+    res.status(204).send();
+  } catch (error: any) {
+    console.error('Erro ao excluir produto:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
   }
 });
 

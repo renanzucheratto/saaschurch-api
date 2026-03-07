@@ -1,0 +1,38 @@
+{
+  "method": "POST",
+  "endpoint": "/eventos/65b6b327-c769-454f-b274-2d21dd8b4229/produtos/batch",
+  "body": {
+    "produtos": [
+      {
+        "nome": "Day use 06/06 (condução própria)",
+        "descricao": "<div><div style='background: #f0f8ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>3x R$ 60,00</strong></div><div style='margin: 10px 0;'><strong>🕐 Horário:</strong> Chegada: 08:30 | Saída: 17:30</div><div style='margin: 10px 0;'><strong>🍽️ Refeições:</strong> Café da manhã, almoço e lanche da tarde.</div><div style='background: #e8f5e8; padding: 10px; border-radius: 5px; text-align: center;'><strong>Valor total: R$ 180,00</strong></div></div>",
+        "valor": 180.00
+      },
+      {
+        "nome": "Day use 06/06 (Ônibus)",
+        "descricao": "<div><div style='background: #f0f8ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>3x R$ 80,00</strong></div><div style='margin: 10px 0;'><strong>🕐 Horário:</strong> Chegada: 08:30 | Saída: 17:30</div><div style='margin: 10px 0;'><strong>🍽️ Refeições:</strong> Café da manhã, almoço e lanche da tarde.</div><div style='background: #e8f5e8; padding: 10px; border-radius: 5px; text-align: center;'><strong>Valor total: R$ 240,00</strong></div></div>",
+        "valor": 240.00
+      },
+      {
+        "nome": "Retiro - 23/10 à 25/10 (condução própria)",
+        "descricao": "<div><div style='background: #f0f8ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>8x R$ 95,00</strong></div><div style='margin: 10px 0;'><strong>🕐 Horário:</strong> Chegada: 23/10 às 19h | Saída: 25/10 às 15h</div><div style='margin: 10px 0;'><strong>🍽️ Refeições:</strong> Café da manhã, almoço, lanche da tarde e jantar.</div><div style='background: #e8f5e8; padding: 10px; border-radius: 5px; text-align: center;'><strong>Valor total: R$ 760,00</strong></div></div>",
+        "valor": 760.00
+      },
+      {
+        "nome": "Retiro - 23/10 à 25/10 (Ônibus)",
+        "descricao": "<div><div style='background: #f0f8ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>8x R$ 110,00</strong></div><div style='margin: 10px 0;'><strong>🕐 Horário:</strong> Chegada: 23/10 às 19h | Saída: 25/10 às 15h</div><div style='margin: 10px 0;'><strong>🍽️ Refeições:</strong> Café da manhã, almoço, lanche da tarde e jantar.</div><div style='background: #e8f5e8; padding: 10px; border-radius: 5px; text-align: center;'><strong>Valor total: R$ 880,00</strong></div></div>",
+        "valor": 880.00
+      },
+      {
+        "nome": "Pacote Day use + Retiro (Condução própria)",
+        "descricao": "<div><div style='background: #f0f8ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>8x R$ 120,00</strong></div><hr style='margin: 15px 0;' /><div style='background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>📅 Day use 06/06</strong></div><div style='margin: 10px 0; padding-left: 20px;'><strong>🕐 Horário:</strong> Chegada: 08:30 | Saída: 17:30<br><strong>🍽️ Refeições:</strong> Café da manhã, almoço e lanche da tarde.</div><hr style='margin: 15px 0;' /><div style='background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>📅 Retiro - 23/10 à 25/10</strong></div><div style='margin: 10px 0; padding-left: 20px;'><strong>🕐 Horário:</strong> Chegada: 23/10 às 19h | Saída: 25/10 às 15h<br><strong>🍽️ Refeições:</strong> Café da manhã, almoço, lanche da tarde e jantar.</div><div style='background: #e8f5e8; padding: 10px; border-radius: 5px; text-align: center;'><strong>Valor total: R$ 960,00</strong></div></div>",
+        "valor": 960.00
+      },
+      {
+        "nome": "Pacote Day use + Retiro (Ônibus)",
+        "descricao": "<div><div style='background: #f0f8ff; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>8x R$ 140,00</strong></div><hr style='margin: 15px 0;' /><div style='background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>📅 Day use 06/06</strong></div><div style='margin: 10px 0; padding-left: 20px;'><strong>🕐 Horário:</strong> Chegada: 08:30 | Saída: 17:30<br><strong>🍽️ Refeições:</strong> Café da manhã, almoço e lanche da tarde.</div><hr style='margin: 15px 0;' /><div style='background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;'><strong>📅 Retiro - 23/10 à 25/10</strong></div><div style='margin: 10px 0; padding-left: 20px;'><strong>🕐 Horário:</strong> Chegada: 23/10 às 19h | Saída: 25/10 às 15h<br><strong>🍽️ Refeições:</strong> Café da manhã, almoço, lanche da tarde e jantar.</div><div style='background: #e8f5e8; padding: 10px; border-radius: 5px; text-align: center;'><strong>Valor total: R$ 1.120,00</strong></div></div>",
+        "valor": 1120.00
+      }
+    ]
+  }
+}

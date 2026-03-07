@@ -8,16 +8,18 @@ datasource db {
 }
 
 model Eventos {
-  id            String   @id @default(uuid())
-  nome          String
-  data_inicio   DateTime
-  data_fim      DateTime
-  descricao     String?
-  userId        String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                   String   @id @default(uuid())
+  nome                 String
+  data_inicio          DateTime
+  data_fim             DateTime
+  descricao            String?
+  selecao_unica_produto Boolean  @default(true)
+  userId               String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
   
-  participantes Participantes[]
+  participantes        Participantes[]
+  produtos             ProdutosEvento[]
 
   @@map("eventos")
 }
@@ -33,7 +35,41 @@ model Participantes {
   updatedAt      DateTime @updatedAt
   
   evento         Eventos  @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  produtos       ParticipanteProdutos[]
 
   @@index([eventoId])
   @@map("participantes")
+}
+
+model ProdutosEvento {
+  id          String   @id @default(uuid())
+  eventoId    String
+  nome        String
+  descricao   String?
+  valor       Decimal
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  evento      Eventos  @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  participantes ParticipanteProdutos[]
+
+  @@index([eventoId])
+  @@map("produtos_evento")
+}
+
+model ParticipanteProdutos {
+  id             String   @id @default(uuid())
+  participanteId String
+  produtoId      String
+  valor_pago     Decimal
+  data_pagamento DateTime?
+  createdAt      DateTime @default(now())
+  
+  participante   Participantes @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  produto        ProdutosEvento @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+
+  @@unique([participanteId, produtoId])
+  @@index([participanteId])
+  @@index([produtoId])
+  @@map("participante_produtos")
 }
