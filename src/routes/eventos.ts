@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma/client.js';
+import { verifyRecaptcha } from '../middleware/recaptcha.js';
 
 const router = Router();
 
@@ -158,11 +159,38 @@ router.get('/:id', async (req, res) => {
 router.post('/:eventoId/participantes', async (req, res) => {
   try {
     const { eventoId } = req.params;
-    const { nome, email, telefone, termo_assinado, produtos_selecionados } = req.body;
+    const { nome, email, telefone, termo_assinado, produtos_selecionados, recaptchaToken } = req.body;
+
+    console.log('[BACKEND] Dados recebidos:', {
+      nome: !!nome,
+      email: !!email,
+      telefone: !!telefone,
+      termo_assinado,
+      produtos_selecionados: produtos_selecionados?.length,
+      recaptchaToken: recaptchaToken ? 'PRESENTE' : 'AUSENTE'
+    });
 
     if (!nome || !email || !telefone || termo_assinado === undefined || !produtos_selecionados || produtos_selecionados.length === 0) {
       return res.status(400).json({
         error: 'Campos obrigatórios: nome, email, telefone, termo_assinado, produtos_selecionados'
+      });
+    }
+
+    // Validar reCAPTCHA
+    if (!recaptchaToken) {
+      console.error('[BACKEND] Token reCAPTCHA ausente no payload');
+      return res.status(400).json({
+        error: 'Token reCAPTCHA é obrigatório'
+      });
+    }
+
+    console.log('[BACKEND] Validando token reCAPTCHA...');
+    const isRecaptchaValid = await verifyRecaptcha(recaptchaToken);
+    console.log('[BACKEND] Resultado validação reCAPTCHA:', isRecaptchaValid);
+    
+    if (!isRecaptchaValid) {
+      return res.status(400).json({
+        error: 'Falha na verificação reCAPTCHA. Por favor, tente novamente.'
       });
     }
 
