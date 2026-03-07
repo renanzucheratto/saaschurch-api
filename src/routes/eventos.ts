@@ -3,9 +3,12 @@ import { prisma } from '../lib/prisma/client.js';
 
 const router = Router();
 
-// Helper para formatar data no timezone de Brasília (-03:00)
+// Helper para formatar data assumindo que o banco armazena em horário de Brasília
 function formatDateToBrasilia(date: Date): string {
-  return date.toLocaleString('sv-SE', { timeZone: 'America/Sao_Paulo' }).replace(' ', 'T') + '-03:00';
+  // O banco armazena as datas como UTC, mas são na verdade horários de Brasília
+  // Então pegamos a data UTC e adicionamos o offset de Brasília (-03:00)
+  const isoString = date.toISOString();
+  return isoString.replace('Z', '-03:00');
 }
 
 // POST /eventos - Criar evento
