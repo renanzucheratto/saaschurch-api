@@ -2,6 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import eventosRoutes from './routes/eventos.js';
+import authRoutes from './routes/auth.js';
+import instituicoesRoutes from './routes/instituicoes.js';
+import usersRoutes from './routes/users.js';
 
 const app = express();
 
@@ -17,6 +20,9 @@ app.use(
 );
 app.use(express.json());
 
+app.use('/auth', authRoutes);
+app.use('/instituicoes', instituicoesRoutes);
+app.use('/users', usersRoutes);
 app.use('/eventos', eventosRoutes);
 
 // Para desenvolvimento local

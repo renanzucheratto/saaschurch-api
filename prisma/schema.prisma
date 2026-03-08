@@ -7,6 +7,43 @@ datasource db {
   relationMode = "prisma"
 }
 
+model Instituicao {
+  id        String   @id @default(uuid())
+  nome      String
+  cnpj      String?  @unique
+  endereco  String?
+  telefone  String?
+  email     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  users     Users[]
+  eventos   Eventos[]
+
+  @@map("instituicoes")
+}
+
+model Users {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  nome          String
+  telefone      String?
+  rg            String?
+  cpf           String?  @unique
+  userType      String   @default("membro")
+  instituicaoId String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  eventos       Eventos[]
+
+  @@index([instituicaoId])
+  @@index([email])
+  @@index([cpf])
+  @@map("users")
+}
+
 model Eventos {
   id                   String   @id @default(uuid())
   nome                 String
@@ -15,12 +52,17 @@ model Eventos {
   descricao            String?
   selecao_unica_produto Boolean  @default(true)
   userId               String?
+  instituicaoId        String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   
+  user                 Users?       @relation(fields: [userId], references: [id])
+  instituicao          Instituicao? @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   participantes        Participantes[]
   produtos             ProdutosEvento[]
 
+  @@index([userId])
+  @@index([instituicaoId])
   @@map("eventos")
 }
 
