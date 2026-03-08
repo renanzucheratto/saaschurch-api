@@ -27,6 +27,7 @@ router.post('/signup', async (req: Request, res: Response) => {
     });
 
     if (!instituicao) {
+      console.error('Instituição não encontrada para o ID:', instituicaoId);
       return res.status(404).json({ error: 'Instituição não encontrada' });
     }
 
@@ -49,27 +50,42 @@ router.post('/signup', async (req: Request, res: Response) => {
       return res.status(400).json({ error: error.message });
     }
 
-    const user = await prisma.users.findUnique({
-      where: { id: data.user.id },
-      include: {
-        instituicao: true,
-      },
-    });
+    // Create user in database manually
+    try {
+      await prisma.users.create({
+        data: {
+          id: data.user.id,
+          email,
+          nome,
+          telefone,
+          rg,
+          cpf,
+          userType: userType || 'membro',
+          instituicaoId,
+        },
+      });
+    } catch (dbError) {
+      console.error('Erro ao criar usuário no banco de dados:', dbError);
+      // If user creation in database fails, delete from Supabase Auth
+      await supabaseAdmin.auth.admin.deleteUser(data.user.id);
+      return res.status(500).json({ error: 'Erro ao criar usuário no banco de dados' });
+    }
 
+    // Return the created user data
     return res.status(201).json({
       message: 'Usuário criado com sucesso',
       user: {
-        id: user!.id,
-        email: user!.email,
-        nome: user!.nome,
-        telefone: user!.telefone,
-        rg: user!.rg,
-        cpf: user!.cpf,
-        userType: user!.userType,
-        instituicaoId: user!.instituicaoId,
+        id: data.user.id,
+        email,
+        nome,
+        telefone,
+        rg,
+        cpf,
+        userType: userType || 'membro',
+        instituicaoId,
         instituicao: {
-          id: user!.instituicao.id,
-          nome: user!.instituicao.nome,
+          id: instituicao.id,
+          nome: instituicao.nome,
         },
       },
     });
