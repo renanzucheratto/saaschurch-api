@@ -68,7 +68,7 @@ router.get('/', authenticateUser, requireBackoffice, async (req: AuthRequest, re
 
 router.get('/:id', authenticateUser, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     if (req.user!.userType !== 'backoffice' && req.user!.instituicaoId !== id) {
       return res.status(403).json({ error: 'Acesso negado' });
@@ -99,7 +99,7 @@ router.get('/:id', authenticateUser, async (req: AuthRequest, res: Response) => 
 
 router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const { nome, cnpj, endereco, telefone, email }: UpdateInstituicaoData = req.body;
 
     const instituicao = await prisma.instituicao.findUnique({
@@ -143,7 +143,7 @@ router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest,
 
 router.delete('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     const instituicao = await prisma.instituicao.findUnique({
       where: { id },
@@ -161,7 +161,7 @@ router.delete('/:id', authenticateUser, requireBackoffice, async (req: AuthReque
       return res.status(404).json({ error: 'Instituição não encontrada' });
     }
 
-    if (instituicao._count.users > 0 || instituicao._count.eventos > 0) {
+    if ((instituicao as any)._count.users > 0 || (instituicao as any)._count.eventos > 0) {
       return res.status(400).json({ 
         error: 'Não é possível excluir uma instituição com usuários ou eventos vinculados' 
       });
@@ -180,7 +180,7 @@ router.delete('/:id', authenticateUser, requireBackoffice, async (req: AuthReque
 
 router.get('/:id/users', authenticateUser, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     if (req.user!.userType !== 'backoffice' && req.user!.instituicaoId !== id) {
       return res.status(403).json({ error: 'Acesso negado' });
@@ -211,7 +211,7 @@ router.get('/:id/users', authenticateUser, async (req: AuthRequest, res: Respons
 
 router.get('/:id/eventos', authenticateUser, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     if (req.user!.userType !== 'backoffice' && req.user!.instituicaoId !== id) {
       return res.status(403).json({ error: 'Acesso negado' });

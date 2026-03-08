@@ -43,7 +43,7 @@ router.get('/', authenticateUser, requireBackoffice, async (req: AuthRequest, re
 
 router.get('/:id', authenticateUser, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     if (req.user!.userType !== 'backoffice' && req.user!.id !== id) {
       return res.status(403).json({ error: 'Acesso negado' });
@@ -73,7 +73,7 @@ router.get('/:id', authenticateUser, async (req: AuthRequest, res: Response) => 
 
 router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const { nome, telefone, email, userType } = req.body;
 
     const user = await prisma.users.findUnique({
@@ -138,7 +138,7 @@ router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest,
 
 router.delete('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     const user = await prisma.users.findUnique({
       where: { id },
@@ -159,7 +159,7 @@ router.delete('/:id', authenticateUser, requireBackoffice, async (req: AuthReque
 
 router.post('/:id/reset-password', authenticateUser, requireBackoffice, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const { password } = req.body;
 
     if (!password || password.length < 6) {
@@ -191,7 +191,7 @@ router.post('/:id/reset-password', authenticateUser, requireBackoffice, async (r
 
 router.post('/:id/change-institution', authenticateUser, requireBackoffice, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const { instituicaoId } = req.body;
 
     if (!instituicaoId) {
