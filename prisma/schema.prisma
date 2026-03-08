@@ -39,6 +39,7 @@ model Participantes {
   evento         Eventos  @relation(fields: [eventoId], references: [id], onDelete: Cascade)
   produtos       ParticipanteProdutos[]
 
+  @@unique([eventoId, cpf])
   @@index([eventoId])
   @@map("participantes")
 }

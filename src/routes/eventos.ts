@@ -215,17 +215,17 @@ router.post('/:eventoId/participantes', async (req, res) => {
       });
     }
 
-    // Verificar se já existe um participante com este email no evento
+    // Verificar se já existe um participante com este CPF no evento
     const participanteExistente = await prisma.participantes.findFirst({
       where: {
         eventoId,
-        email: email.toLowerCase().trim()
+        cpf: cpf.replace(/\D/g, '')
       }
     });
 
     if (participanteExistente) {
       return res.status(400).json({
-        error: 'Já existe um participante com este email cadastrado neste evento'
+        error: 'Já existe um participante com este CPF cadastrado neste evento'
       });
     }
 
@@ -236,7 +236,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
         email: email.toLowerCase().trim(),
         telefone,
         rg,
-        cpf,
+        cpf: cpf.replace(/\D/g, ''),
         termo_assinado,
         produtos: {
           create: produtos_selecionados.map((produto: any) => ({
