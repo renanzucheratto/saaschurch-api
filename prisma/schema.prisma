@@ -30,6 +30,8 @@ model Participantes {
   nome           String
   email          String
   telefone       String
+  rg             String
+  cpf            String
   termo_assinado Boolean
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
