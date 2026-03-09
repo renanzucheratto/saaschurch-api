@@ -584,4 +584,60 @@ router.delete('/:eventoId/produtos/:produtoId', async (req, res) => {
   }
 });
 
+// GET /eventos/:eventoId/estatisticas/participantes-por-produto - Obter estatísticas de participantes por produto
+router.get('/:eventoId/estatisticas/participantes-por-produto', async (req, res) => {
+  try {
+    const { eventoId } = req.params;
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id: eventoId }
+    });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const estatisticas = await prisma.participanteProdutos.groupBy({
+      by: ['produtoId'],
+      where: {
+        produto: {
+          eventoId: eventoId
+        }
+      },
+      _count: {
+        participanteId: true
+      }
+    });
+
+    const produtosIds = estatisticas.map(e => e.produtoId);
+    const produtos = await prisma.produtosEvento.findMany({
+      where: {
+        id: { in: produtosIds }
+      },
+      select: {
+        id: true,
+        nome: true
+      }
+    });
+
+    const resultado = estatisticas.map(stat => {
+      const produto = produtos.find(p => p.id === stat.produtoId);
+      return {
+        produtoId: stat.produtoId,
+        produtoNome: produto?.nome || 'Produto não encontrado',
+        quantidadeParticipantes: stat._count.participanteId
+      };
+    });
+
+    resultado.sort((a, b) => b.quantidadeParticipantes - a.quantidadeParticipantes);
+
+    res.json(resultado);
+  } catch (error) {
+    console.error('Erro ao obter estatísticas:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 export default router;
