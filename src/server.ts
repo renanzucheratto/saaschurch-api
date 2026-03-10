@@ -15,6 +15,7 @@ app.use(
       'http://localhost:3001',
       'https://saaschurch-new.vercel.app',
       'https://saaschurch-new-git-dev-rezucherattos-projects.vercel.app',
+      'https://app.igrejaformosadecristo.com',
     ],
     credentials: true,
   }),
