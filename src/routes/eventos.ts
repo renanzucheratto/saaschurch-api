@@ -74,7 +74,13 @@ router.get('/', async (req, res) => {
       orderBy: { data_inicio: 'desc' },
       include: {
         _count: {
-          select: { participantes: true }
+          select: { 
+            participantes: {
+              where: {
+                isDeleted: false
+              }
+            } 
+          }
         },
         produtos: {
           select: {
@@ -215,11 +221,12 @@ router.post('/:eventoId/participantes', async (req, res) => {
       });
     }
 
-    // Verificar se já existe um participante com este CPF no evento
+    // Verificar se já existe um participante ativo com este CPF no evento
     const participanteExistente = await prisma.participantes.findFirst({
       where: {
         eventoId,
-        cpf: cpf.replace(/\D/g, '')
+        cpf: cpf.replace(/\D/g, ''),
+        isDeleted: false
       }
     });
 
@@ -290,6 +297,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
 router.get('/:eventoId/participantes', async (req, res) => {
   try {
     const { eventoId } = req.params;
+    const { isDeleted } = req.query;
 
     const evento = await prisma.eventos.findUnique({
       where: { id: eventoId }
@@ -302,7 +310,10 @@ router.get('/:eventoId/participantes', async (req, res) => {
     }
 
     const participantes = await prisma.participantes.findMany({
-      where: { eventoId },
+      where: { 
+        eventoId,
+        isDeleted: isDeleted === 'true'
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         produtos: {
@@ -558,9 +569,14 @@ router.delete('/:eventoId/produtos/:produtoId', async (req, res) => {
       });
     }
 
-    // Verificar se há participantes usando este produto
+    // Verificar se há participantes ativos usando este produto
     const participantesComProduto = await prisma.participanteProdutos.findMany({
-      where: { produtoId }
+      where: { 
+        produtoId,
+        participante: {
+          isDeleted: false
+        }
+       }
     });
 
     if (participantesComProduto.length > 0) {
@@ -604,6 +620,9 @@ router.get('/:eventoId/estatisticas/participantes-por-produto', async (req, res)
       where: {
         produto: {
           eventoId: eventoId
+        },
+        participante: {
+          isDeleted: false
         }
       },
       _count: {
@@ -637,6 +656,126 @@ router.get('/:eventoId/estatisticas/participantes-por-produto', async (req, res)
   } catch (error) {
     console.error('Erro ao obter estatísticas:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// PUT /eventos/:eventoId/participantes/:participanteId - Editar participante
+router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
+  try {
+    const { eventoId, participanteId } = req.params;
+    const { nome, email, telefone, rg, cpf, termo_assinado, isDeleted } = req.body;
+
+    const participante = await prisma.participantes.findFirst({
+      where: { 
+        id: participanteId,
+        eventoId: eventoId,
+      }
+    });
+
+    if (!participante) {
+      return res.status(404).json({
+        error: 'Participante não encontrado neste evento'
+      });
+    }
+
+    // Se estiver atualizando o CPF, verificar se já existe outro participante com o mesmo CPF
+    if (cpf && cpf.replace(/\D/g, '') !== participante.cpf) {
+      const cpfExistente = await prisma.participantes.findFirst({
+        where: {
+          eventoId,
+          cpf: cpf.replace(/\D/g, ''),
+          isDeleted: false
+        }
+      });
+      if (cpfExistente) {
+        return res.status(400).json({
+          error: 'Já existe um participante ativo com este CPF neste evento'
+        });
+      }
+    }
+
+    const participanteAtualizado = await prisma.participantes.update({
+      where: { id: participanteId },
+      data: {
+        nome: nome || participante.nome,
+        email: email ? email.toLowerCase().trim() : participante.email,
+        telefone: telefone || participante.telefone,
+        rg: rg || participante.rg,
+        cpf: cpf ? cpf.replace(/\D/g, '') : participante.cpf,
+        termo_assinado: termo_assinado !== undefined ? termo_assinado : participante.termo_assinado,
+        isDeleted: isDeleted !== undefined ? isDeleted : participante.isDeleted
+      },
+      include: {
+        produtos: {
+          include: {
+            produto: {
+              select: {
+                id: true,
+                nome: true,
+                descricao: true,
+                valor: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    const participanteFormatado = {
+      ...participanteAtualizado,
+      createdAt: formatDateToBrasilia(participanteAtualizado.createdAt),
+      updatedAt: formatDateToBrasilia(participanteAtualizado.updatedAt),
+      produtos: participanteAtualizado.produtos.map(pp => ({
+        id: pp.id,
+        nome: pp.produto.nome,
+        valor: parseFloat(pp.produto.valor.toString()),
+      }))
+    };
+
+    res.json(participanteFormatado);
+  } catch (error: any) {
+    console.error('Erro ao atualizar participante:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
+  }
+});
+
+// DELETE /eventos/:eventoId/participantes/:participanteId - Exclusão lógica do participante
+router.delete('/:eventoId/participantes/:participanteId', async (req, res) => {
+  try {
+    const { eventoId, participanteId } = req.params;
+
+    const participante = await prisma.participantes.findFirst({
+      where: { 
+        id: participanteId,
+        eventoId: eventoId,
+        isDeleted: false
+      }
+    });
+
+    if (!participante) {
+      return res.status(404).json({
+        error: 'Participante não encontrado neste evento'
+      });
+    }
+
+    // Exclusão lógica: apenas atualizar a flag isDeleted
+    await prisma.participantes.update({
+      where: { id: participanteId },
+      data: { isDeleted: true }
+    });
+
+    res.status(204).send();
+  } catch (error: any) {
+    console.error('Erro ao excluir participante (lógico):', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
   }
 });
 

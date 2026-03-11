@@ -75,6 +75,7 @@ model Participantes {
   rg             String
   cpf            String
   termo_assinado Boolean
+  isDeleted      Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   
