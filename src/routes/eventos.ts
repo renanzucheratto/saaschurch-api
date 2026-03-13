@@ -659,6 +659,77 @@ router.get('/:eventoId/estatisticas/participantes-por-produto', async (req, res)
   }
 });
 
+// GET /eventos/:eventoId/estatisticas/dayuse-retiro - Obter estatísticas divididas entre Day Use e Retiro
+router.get('/:eventoId/estatisticas/dayuse-retiro', async (req, res) => {
+  try {
+    const { eventoId } = req.params;
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id: eventoId }
+    });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const estatisticas = await prisma.participanteProdutos.groupBy({
+      by: ['produtoId'],
+      where: {
+        produto: {
+          eventoId: eventoId
+        },
+        participante: {
+          isDeleted: false
+        }
+      },
+      _count: {
+        participanteId: true
+      }
+    });
+
+    const produtosIds = estatisticas.map(e => e.produtoId);
+    const produtos = await prisma.produtosEvento.findMany({
+      where: {
+        id: { in: produtosIds }
+      },
+      select: {
+        id: true,
+        nome: true
+      }
+    });
+
+    let totalDayUse = 0;
+    let totalRetiro = 0;
+
+    estatisticas.forEach(stat => {
+      const produto = produtos.find(p => p.id === stat.produtoId);
+      if (produto) {
+        const nome = produto.nome.toLowerCase();
+        const count = stat._count.participanteId;
+
+        if (nome.includes('pacote') || (nome.includes('day use') && nome.includes('retiro'))) {
+          totalDayUse += count;
+          totalRetiro += count;
+        } else if (nome.includes('day use') || nome.includes('dayuse')) {
+          totalDayUse += count;
+        } else if (nome.includes('retiro')) {
+          totalRetiro += count;
+        }
+      }
+    });
+
+    res.json([
+      { id: 'day_use', label: 'Day use', value: totalDayUse },
+      { id: 'retiro', label: 'Retiro', value: totalRetiro }
+    ]);
+  } catch (error) {
+    console.error('Erro ao obter estatísticas para gráfico de pizza:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 // PUT /eventos/:eventoId/participantes/:participanteId - Editar participante
 router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
   try {
