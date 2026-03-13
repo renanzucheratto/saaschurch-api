@@ -15,7 +15,7 @@ function formatDateToBrasilia(date: Date): string {
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, produtos } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos } = req.body;
 
     if (!nome || !data_inicio || !data_fim) {
       return res.status(400).json({
@@ -30,6 +30,7 @@ router.post('/', async (req, res) => {
         data_fim: new Date(data_fim),
         descricao: descricao || null,
         selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : true,
+        imagem_url: imagem_url || null,
         userId: null,
         produtos: produtos ? {
           create: produtos.map((produto: any) => ({
@@ -100,6 +101,7 @@ router.get('/', async (req, res) => {
       data_fim: formatDateToBrasilia(evento.data_fim),
       descricao: evento.descricao,
       selecao_unica_produto: evento.selecao_unica_produto,
+      imagem_url: evento.imagem_url,
       userId: evento.userId,
       createdAt: formatDateToBrasilia(evento.createdAt),
       updatedAt: formatDateToBrasilia(evento.updatedAt),

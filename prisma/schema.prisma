@@ -51,6 +51,7 @@ model Eventos {
   data_fim             DateTime
   descricao            String?
   selecao_unica_produto Boolean  @default(true)
+  imagem_url           String?
   userId               String?
   instituicaoId        String?
   createdAt            DateTime @default(now())
