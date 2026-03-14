@@ -169,9 +169,9 @@ router.post('/:eventoId/participantes', async (req, res) => {
     const { eventoId } = req.params;
     const { nome, email, telefone, rg, cpf, termo_assinado, produtos_selecionados, recaptchaToken } = req.body;
 
-    if (!nome || !email || !telefone || !rg || !cpf || termo_assinado === undefined || !produtos_selecionados || produtos_selecionados.length === 0) {
+    if (!nome || !email || !telefone || !rg || !cpf || termo_assinado === undefined) {
       return res.status(400).json({
-        error: 'Campos obrigatórios: nome, email, telefone, rg, cpf, termo_assinado, produtos_selecionados'
+        error: 'Campos obrigatórios: nome, email, telefone, rg, cpf, termo_assinado'
       });
     }
 
@@ -201,26 +201,35 @@ router.post('/:eventoId/participantes', async (req, res) => {
       });
     }
 
-    // Validar se todos os produtos selecionados existem no evento
-    const produtosIds = produtos_selecionados.map((p: any) => p.produtoId);
-    const produtosValidos = await prisma.produtosEvento.findMany({
-      where: {
-        id: { in: produtosIds },
-        eventoId: eventoId
+    let produtosValidos: any[] = [];
+    if (evento.produtos && evento.produtos.length > 0) {
+      if (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId) {
+        return res.status(400).json({
+          error: 'Este evento possui produtos, selecione ao menos um.'
+        });
       }
-    });
 
-    if (produtosValidos.length !== produtos_selecionados.length) {
-      return res.status(400).json({
-        error: 'Um ou mais produtos selecionados não pertencem a este evento'
+      // Validar se todos os produtos selecionados existem no evento
+      const produtosIds = produtos_selecionados.map((p: any) => p.produtoId).filter(Boolean);
+      produtosValidos = await prisma.produtosEvento.findMany({
+        where: {
+          id: { in: produtosIds },
+          eventoId: eventoId
+        }
       });
-    }
 
-    // Validar seleção única de produto se necessário
-    if (evento.selecao_unica_produto && produtos_selecionados.length > 1) {
-      return res.status(400).json({
-        error: 'Este evento permite apenas a seleção de um produto'
-      });
+      if (produtosValidos.length !== produtos_selecionados.length) {
+        return res.status(400).json({
+          error: 'Um ou mais produtos selecionados não pertencem a este evento'
+        });
+      }
+
+      // Validar seleção única de produto se necessário
+      if (evento.selecao_unica_produto && produtos_selecionados.length > 1) {
+        return res.status(400).json({
+          error: 'Este evento permite apenas a seleção de um produto'
+        });
+      }
     }
 
     // Verificar se já existe um participante ativo com este CPF no evento
@@ -247,10 +256,10 @@ router.post('/:eventoId/participantes', async (req, res) => {
         rg,
         cpf: cpf.replace(/\D/g, ''),
         termo_assinado,
-        produtos: {
+        produtos: (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId) ? undefined : {
           create: produtos_selecionados.map((produto: any) => ({
             produtoId: produto.produtoId,
-            valor_pago: produto.valor_pago || produtosValidos.find(p => p.id === produto.produtoId)?.valor || 0
+            valor_pago: produto.valor_pago || produtosValidos.find((p: any) => p.id === produto.produtoId)?.valor || 0
           }))
         }
       },
