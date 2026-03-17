@@ -400,6 +400,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
       updatedAt: formatDateToBrasilia(participante.updatedAt),
       produtos: participante.produtos.map(pp => ({
         id: pp.id,
+        produtoId: pp.produtoId,
         nome: pp.produto?.nome || "Produto removido",
         valor_pago: parseFloat(pp.valor_pago.toString()),
         produto: pp.produto ? {
@@ -464,6 +465,7 @@ router.get('/:eventoId/participantes', async (req, res) => {
       updatedAt: formatDateToBrasilia(participante.updatedAt),
       produtos: participante.produtos.map(pp => ({
         id: pp.id,
+        produtoId: pp.produtoId,
         nome: pp.produto?.nome || "Produto removido",
         valor: pp.produto ? parseFloat(pp.produto.valor.toString()) : parseFloat(pp.valor_pago.toString()),
       }))
@@ -861,12 +863,15 @@ router.get('/:eventoId/estatisticas/dayuse-retiro', async (req, res) => {
 router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
   try {
     const { eventoId, participanteId } = req.params;
-    const { nome, email, telefone, rg, cpf, termo_assinado, isDeleted } = req.body;
+    const { nome, email, telefone, rg, cpf, termo_assinado, isDeleted, produtoId } = req.body;
 
     const participante = await prisma.participantes.findFirst({
       where: {
         id: participanteId,
         eventoId: eventoId,
+      },
+      include: {
+        produtos: true
       }
     });
 
@@ -892,32 +897,69 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
       }
     }
 
-    const participanteAtualizado = await prisma.participantes.update({
-      where: { id: participanteId },
-      data: {
-        nome: nome || participante.nome,
-        email: email ? email.toLowerCase().trim() : participante.email,
-        telefone: telefone || participante.telefone,
-        rg: rg || participante.rg,
-        cpf: cpf ? cpf.replace(/\D/g, '') : participante.cpf,
-        termo_assinado: termo_assinado !== undefined ? termo_assinado : participante.termo_assinado,
-        isDeleted: isDeleted !== undefined ? isDeleted : participante.isDeleted
-      },
-      include: {
-        produtos: {
-          include: {
-            produto: {
-              select: {
-                id: true,
-                nome: true,
-                descricao: true,
-                valor: true
+    const participanteAtualizado = await prisma.$transaction(async (tx) => {
+      // 1. Atualizar dados básicos
+      const p = await tx.participantes.update({
+        where: { id: participanteId },
+        data: {
+          nome: nome || participante.nome,
+          email: email ? email.toLowerCase().trim() : participante.email,
+          telefone: telefone || participante.telefone,
+          rg: rg || participante.rg,
+          cpf: cpf ? cpf.replace(/\D/g, '') : participante.cpf,
+          termo_assinado: termo_assinado !== undefined ? termo_assinado : participante.termo_assinado,
+          isDeleted: isDeleted !== undefined ? isDeleted : participante.isDeleted
+        }
+      });
+
+      // 2. Atualizar produto se fornecido
+      if (produtoId) {
+        // Buscar informações do produto para garantir que existe e obter o valor
+        const produtoInfo = await tx.produtosEvento.findFirst({
+          where: { id: produtoId, eventoId }
+        });
+
+        if (!produtoInfo) {
+          throw new Error('Produto não encontrado para este evento');
+        }
+
+        // Remover produtos anteriores e cadastrar o novo
+        await tx.participanteProdutos.deleteMany({
+          where: { participanteId }
+        });
+
+        await tx.participanteProdutos.create({
+          data: {
+            participanteId,
+            produtoId,
+            valor_pago: produtoInfo.valor
+          }
+        });
+      }
+
+      // Retornar o participante completo e formatado
+      return await tx.participantes.findUnique({
+        where: { id: participanteId },
+        include: {
+          produtos: {
+            include: {
+              produto: {
+                select: {
+                  id: true,
+                  nome: true,
+                  descricao: true,
+                  valor: true
+                }
               }
             }
           }
         }
-      }
+      });
     });
+
+    if (!participanteAtualizado) {
+      throw new Error('Erro ao atualizar participante');
+    }
 
     const participanteFormatado = {
       ...participanteAtualizado,
@@ -925,8 +967,9 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
       updatedAt: formatDateToBrasilia(participanteAtualizado.updatedAt),
       produtos: participanteAtualizado.produtos.map(pp => ({
         id: pp.id,
-        nome: pp.produto.nome,
-        valor: parseFloat(pp.produto.valor.toString()),
+        produtoId: pp.produtoId,
+        nome: pp.produto?.nome || "Produto removido",
+        valor: pp.produto ? parseFloat(pp.produto.valor.toString()) : parseFloat(pp.valor_pago.toString()),
       }))
     };
 
