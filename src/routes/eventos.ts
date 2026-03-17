@@ -60,7 +60,7 @@ router.post('/', async (req, res) => {
     res.status(201).json(eventoFormatado);
   } catch (error: any) {
     console.error('Erro ao criar evento:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
@@ -75,12 +75,12 @@ router.get('/', async (req, res) => {
       orderBy: { data_inicio: 'desc' },
       include: {
         _count: {
-          select: { 
+          select: {
             participantes: {
               where: {
                 isDeleted: false
               }
-            } 
+            }
           }
         },
         produtos: {
@@ -167,7 +167,7 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos } = req.body;
 
     const evento = await prisma.eventos.findUnique({
       where: { id }
@@ -179,20 +179,80 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    const eventoAtualizado = await prisma.eventos.update({
-      where: { id },
-      data: {
-        nome: nome !== undefined ? nome : evento.nome,
-        data_inicio: data_inicio !== undefined ? new Date(data_inicio) : evento.data_inicio,
-        data_fim: data_fim !== undefined ? new Date(data_fim) : evento.data_fim,
-        descricao: descricao !== undefined ? (descricao || null) : evento.descricao,
-        selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : evento.selecao_unica_produto,
-        imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
-      },
-      include: {
-        produtos: true
+    const eventoAtualizado = await prisma.$transaction(async (prismaTransaction) => {
+      // 1. Atualizar o evento em si
+      await prismaTransaction.eventos.update({
+        where: { id },
+        data: {
+          nome: nome !== undefined ? nome : evento.nome,
+          data_inicio: data_inicio !== undefined ? new Date(data_inicio) : evento.data_inicio,
+          data_fim: data_fim !== undefined ? new Date(data_fim) : evento.data_fim,
+          descricao: descricao !== undefined ? (descricao || null) : evento.descricao,
+          selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : evento.selecao_unica_produto,
+          imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
+        }
+      });
+
+      // 2. Processar produtos se o array for fornecido
+      if (produtos && Array.isArray(produtos)) {
+        const produtosExistentes = await prismaTransaction.produtosEvento.findMany({
+          where: { eventoId: id }
+        });
+
+        const produtosInputIds = produtos.map((p: any) => p.id).filter(Boolean);
+
+        // 2.a Validar e Excluir produtos que não estão mais no payload
+        const produtosParaExcluir = produtosExistentes.filter(pe => !produtosInputIds.includes(pe.id));
+
+        for (const p of produtosParaExcluir) {
+          const participantes = await prismaTransaction.participanteProdutos.findMany({
+            where: {
+              produtoId: p.id,
+              participante: { isDeleted: false }
+            }
+          });
+
+          if (participantes.length > 0) {
+            throw new Error(`Não é possível excluir o produto "${p.nome}" pois já há participantes inscritos`);
+          }
+
+          await prismaTransaction.produtosEvento.delete({ where: { id: p.id } });
+        }
+
+        // 2.b Atualizar existentes e criar novos
+        for (const p of produtos) {
+          if (p.id) {
+            await prismaTransaction.produtosEvento.update({
+              where: { id: p.id },
+              data: {
+                nome: p.nome,
+                descricao: p.descricao || null,
+                valor: p.valor
+              }
+            });
+          } else {
+            await prismaTransaction.produtosEvento.create({
+              data: {
+                eventoId: id,
+                nome: p.nome,
+                descricao: p.descricao || null,
+                valor: p.valor
+              }
+            });
+          }
+        }
       }
+
+      // Retornar o evento atualizado com os produtos atualizados
+      return await prismaTransaction.eventos.findUnique({
+        where: { id },
+        include: { produtos: true }
+      });
     });
+
+    if (!eventoAtualizado) {
+      throw new Error('Falha ao atualizar evento');
+    }
 
     const eventoFormatado = {
       ...eventoAtualizado,
@@ -209,8 +269,9 @@ router.put('/:id', async (req, res) => {
     res.json(eventoFormatado);
   } catch (error: any) {
     console.error('Erro ao editar evento:', error);
-    res.status(500).json({ 
-      error: 'Erro interno do servidor',
+    const isValidationError = error?.message?.includes('Não é possível excluir o produto');
+    res.status(isValidationError ? 400 : 500).json({
+      error: isValidationError ? error.message : 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
     });
@@ -237,7 +298,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
     }
 
     const isRecaptchaValid = await verifyRecaptcha(recaptchaToken);
-    
+
     if (!isRecaptchaValid) {
       return res.status(400).json({
         error: 'Falha na verificação reCAPTCHA. Por favor, tente novamente.'
@@ -338,19 +399,20 @@ router.post('/:eventoId/participantes', async (req, res) => {
       createdAt: formatDateToBrasilia(participante.createdAt),
       updatedAt: formatDateToBrasilia(participante.updatedAt),
       produtos: participante.produtos.map(pp => ({
-        ...pp,
+        id: pp.id,
+        nome: pp.produto?.nome || "Produto removido",
         valor_pago: parseFloat(pp.valor_pago.toString()),
-        produto: {
+        produto: pp.produto ? {
           ...pp.produto,
           valor: parseFloat(pp.produto.valor.toString())
-        }
+        } : null
       }))
     };
 
     res.status(201).json(participanteFormatado);
   } catch (error: any) {
     console.error('Erro ao criar participante:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
@@ -375,7 +437,7 @@ router.get('/:eventoId/participantes', async (req, res) => {
     }
 
     const participantes = await prisma.participantes.findMany({
-      where: { 
+      where: {
         eventoId,
         isDeleted: isDeleted === 'true'
       },
@@ -402,8 +464,8 @@ router.get('/:eventoId/participantes', async (req, res) => {
       updatedAt: formatDateToBrasilia(participante.updatedAt),
       produtos: participante.produtos.map(pp => ({
         id: pp.id,
-        nome: pp.produto.nome,
-        valor: parseFloat(pp.produto.valor.toString()),
+        nome: pp.produto?.nome || "Produto removido",
+        valor: pp.produto ? parseFloat(pp.produto.valor.toString()) : parseFloat(pp.valor_pago.toString()),
       }))
     }));
 
@@ -455,7 +517,7 @@ router.post('/:eventoId/produtos', async (req, res) => {
     res.status(201).json(produtoFormatado);
   } catch (error: any) {
     console.error('Erro ao criar produto:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
@@ -528,7 +590,7 @@ router.post('/:eventoId/produtos/batch', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Erro ao criar produtos em lote:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
@@ -577,7 +639,7 @@ router.put('/:eventoId/produtos/:produtoId', async (req, res) => {
     const { nome, descricao, valor } = req.body;
 
     const produto = await prisma.produtosEvento.findFirst({
-      where: { 
+      where: {
         id: produtoId,
         eventoId: eventoId
       }
@@ -608,7 +670,7 @@ router.put('/:eventoId/produtos/:produtoId', async (req, res) => {
     res.json(produtoFormatado);
   } catch (error: any) {
     console.error('Erro ao atualizar produto:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
@@ -622,7 +684,7 @@ router.delete('/:eventoId/produtos/:produtoId', async (req, res) => {
     const { eventoId, produtoId } = req.params;
 
     const produto = await prisma.produtosEvento.findFirst({
-      where: { 
+      where: {
         id: produtoId,
         eventoId: eventoId
       }
@@ -636,12 +698,12 @@ router.delete('/:eventoId/produtos/:produtoId', async (req, res) => {
 
     // Verificar se há participantes ativos usando este produto
     const participantesComProduto = await prisma.participanteProdutos.findMany({
-      where: { 
+      where: {
         produtoId,
         participante: {
           isDeleted: false
         }
-       }
+      }
     });
 
     if (participantesComProduto.length > 0) {
@@ -657,7 +719,7 @@ router.delete('/:eventoId/produtos/:produtoId', async (req, res) => {
     res.status(204).send();
   } catch (error: any) {
     console.error('Erro ao excluir produto:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
@@ -802,7 +864,7 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
     const { nome, email, telefone, rg, cpf, termo_assinado, isDeleted } = req.body;
 
     const participante = await prisma.participantes.findFirst({
-      where: { 
+      where: {
         id: participanteId,
         eventoId: eventoId,
       }
@@ -871,7 +933,7 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
     res.json(participanteFormatado);
   } catch (error: any) {
     console.error('Erro ao atualizar participante:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
@@ -885,7 +947,7 @@ router.delete('/:eventoId/participantes/:participanteId', async (req, res) => {
     const { eventoId, participanteId } = req.params;
 
     const participante = await prisma.participantes.findFirst({
-      where: { 
+      where: {
         id: participanteId,
         eventoId: eventoId,
         isDeleted: false
@@ -907,7 +969,7 @@ router.delete('/:eventoId/participantes/:participanteId', async (req, res) => {
     res.status(204).send();
   } catch (error: any) {
     console.error('Erro ao excluir participante (lógico):', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
       code: error?.code,
