@@ -744,6 +744,14 @@ router.get('/:eventoId/estatisticas/participantes-por-produto', async (req, res)
       });
     }
 
+    const produtos = await prisma.produtosEvento.findMany({
+      where: { eventoId },
+      select: {
+        id: true,
+        nome: true,
+      }
+    });
+
     const estatisticas = await prisma.participanteProdutos.groupBy({
       by: ['produtoId'],
       where: {
@@ -759,23 +767,12 @@ router.get('/:eventoId/estatisticas/participantes-por-produto', async (req, res)
       }
     });
 
-    const produtosIds = estatisticas.map(e => e.produtoId);
-    const produtos = await prisma.produtosEvento.findMany({
-      where: {
-        id: { in: produtosIds }
-      },
-      select: {
-        id: true,
-        nome: true
-      }
-    });
-
-    const resultado = estatisticas.map(stat => {
-      const produto = produtos.find(p => p.id === stat.produtoId);
+    const resultado = produtos.map(produto => {
+      const stat = estatisticas.find(s => s.produtoId === produto.id);
       return {
-        produtoId: stat.produtoId,
-        produtoNome: produto?.nome || 'Produto não encontrado',
-        quantidadeParticipantes: stat._count.participanteId
+        produtoId: produto.id,
+        produtoNome: produto.nome,
+        quantidadeParticipantes: stat ? stat._count.participanteId : 0
       };
     });
 
