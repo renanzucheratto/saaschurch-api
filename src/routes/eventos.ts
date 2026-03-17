@@ -163,6 +163,60 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// PUT /eventos/:id - Editar evento
+router.put('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url } = req.body;
+
+    const evento = await prisma.eventos.findUnique({
+      where: { id }
+    });
+
+    if (!evento) {
+      return res.status(404).json({
+        error: 'Evento não encontrado'
+      });
+    }
+
+    const eventoAtualizado = await prisma.eventos.update({
+      where: { id },
+      data: {
+        nome: nome !== undefined ? nome : evento.nome,
+        data_inicio: data_inicio !== undefined ? new Date(data_inicio) : evento.data_inicio,
+        data_fim: data_fim !== undefined ? new Date(data_fim) : evento.data_fim,
+        descricao: descricao !== undefined ? (descricao || null) : evento.descricao,
+        selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : evento.selecao_unica_produto,
+        imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
+      },
+      include: {
+        produtos: true
+      }
+    });
+
+    const eventoFormatado = {
+      ...eventoAtualizado,
+      data_inicio: formatDateToBrasilia(eventoAtualizado.data_inicio),
+      data_fim: formatDateToBrasilia(eventoAtualizado.data_fim),
+      createdAt: formatDateToBrasilia(eventoAtualizado.createdAt),
+      updatedAt: formatDateToBrasilia(eventoAtualizado.updatedAt),
+      produtos: eventoAtualizado.produtos.map(produto => ({
+        ...produto,
+        valor: parseFloat(produto.valor.toString())
+      }))
+    };
+
+    res.json(eventoFormatado);
+  } catch (error: any) {
+    console.error('Erro ao editar evento:', error);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      details: error?.message,
+      code: error?.code,
+    });
+  }
+});
+
 // POST /eventos/:eventoId/participantes - Criar participante
 router.post('/:eventoId/participantes', async (req, res) => {
   try {
@@ -203,7 +257,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
 
     let produtosValidos: any[] = [];
     if (evento.produtos && evento.produtos.length > 0) {
-      if (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId) {
+      if (evento.selecao_unica_produto && (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId)) {
         return res.status(400).json({
           error: 'Este evento possui produtos, selecione ao menos um.'
         });
