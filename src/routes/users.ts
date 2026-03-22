@@ -5,13 +5,79 @@ import { authenticateUser, requireBackoffice, AuthRequest } from '../middleware/
 
 const router = Router();
 
-router.get('/', authenticateUser, requireBackoffice, async (req: AuthRequest, res: Response) => {
+router.post('/', authenticateUser, async (req: AuthRequest, res: Response) => {
+  try {
+    const { email, nome, telefone, rg, cpf, userType, instituicaoId } = req.body;
+
+    // Se não for backoffice, instituicaoId deve ser do próprio usuário logado
+    const finalInstituicaoId = req.user!.userType === 'backoffice' ? (instituicaoId || req.user!.instituicaoId) : req.user!.instituicaoId;
+
+    if (!email || !nome) {
+      return res.status(400).json({ error: 'Email e nome são obrigatórios' });
+    }
+
+    // Verificar se usuário já existe no banco
+    const existingUser = await prisma.users.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'Este email já está cadastrado' });
+    }
+
+    // Gerar convite via Supabase
+    // O inviteUserByEmail já envia o email se o SMTP estiver configurado no Supabase
+    const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
+      redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/set-password`,
+      data: {
+        nome,
+        telefone,
+        rg,
+        cpf,
+        userType: userType || 'membro',
+        instituicaoId: finalInstituicaoId
+      }
+    });
+
+    if (error) {
+      console.error('Erro ao convidar usuário no Supabase:', error);
+      return res.status(400).json({ error: error.message });
+    }
+
+    // Criar no banco de dados prisma
+    const user = await prisma.users.create({
+      data: {
+        id: data.user.id,
+        email,
+        nome,
+        telefone,
+        rg,
+        cpf,
+        userType: userType || 'membro',
+        instituicaoId: finalInstituicaoId
+      }
+    });
+
+    return res.status(201).json({
+      message: 'Usuário convidado com sucesso. Ele receberá um email para definir a senha.',
+      user
+    });
+  } catch (error) {
+    console.error('Erro ao criar usuário:', error);
+    return res.status(500).json({ error: 'Erro ao criar usuário' });
+  }
+});
+
+router.get('/', authenticateUser, async (req: AuthRequest, res: Response) => {
   try {
     const { instituicaoId, userType } = req.query;
 
     const where: any = {};
 
-    if (instituicaoId) {
+    // Se não for backoffice, só pode ver a sua própria instituição
+    if (req.user!.userType !== 'backoffice') {
+      where.instituicaoId = req.user!.instituicaoId;
+    } else if (instituicaoId) {
       where.instituicaoId = instituicaoId as string;
     }
 

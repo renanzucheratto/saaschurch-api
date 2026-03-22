@@ -307,4 +307,50 @@ router.post('/refresh', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/forgot-password', async (req: Request, res: Response) => {
+  try {
+    const { email, redirectTo } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email é obrigatório' });
+    }
+
+    const { error } = await supabaseAuth.auth.resetPasswordForEmail(email, {
+      redirectTo: redirectTo || `${process.env.FRONTEND_URL}/forgot-password`,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.status(200).json({ message: 'Email de recuperação enviado com sucesso' });
+  } catch (error) {
+    console.error('Erro ao enviar email de recuperação:', error);
+    return res.status(500).json({ error: 'Erro ao enviar email de recuperação' });
+  }
+});
+
+router.patch('/update-password', authenticateUser, async (req: AuthRequest, res: Response) => {
+  try {
+    const { password } = req.body;
+
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres' });
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(req.user!.id, {
+      password,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.status(200).json({ message: 'Senha atualizada com sucesso' });
+  } catch (error) {
+    console.error('Erro ao atualizar senha:', error);
+    return res.status(500).json({ error: 'Erro ao atualizar senha' });
+  }
+});
+
 export default router;

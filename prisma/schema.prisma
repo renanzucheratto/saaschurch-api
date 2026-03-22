@@ -19,6 +19,7 @@ model Instituicao {
   
   users     Users[]
   eventos   Eventos[]
+  areas     Area[]
 
   @@map("instituicoes")
 }
@@ -32,16 +33,49 @@ model Users {
   cpf           String?  @unique
   userType      String   @default("membro")
   instituicaoId String
+  pix_key       String?
+  active        Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
   instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   eventos       Eventos[]
+  areas         UserArea[]
 
   @@index([instituicaoId])
   @@index([email])
   @@index([cpf])
   @@map("users")
+}
+
+model Area {
+  id            String   @id @default(uuid())
+  nome          String
+  instituicaoId String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  users         UserArea[]
+
+  @@index([instituicaoId])
+  @@map("areas")
+}
+
+model UserArea {
+  id        String   @id @default(uuid())
+  userId    String
+  areaId    String
+  cargo     String   // voluntário, líder, vice-líder
+  createdAt DateTime @default(now())
+
+  user      Users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area      Area     @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, areaId])
+  @@index([userId])
+  @@index([areaId])
+  @@map("user_areas")
 }
 
 model Eventos {
