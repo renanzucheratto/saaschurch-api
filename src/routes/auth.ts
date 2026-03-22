@@ -11,14 +11,14 @@ router.post('/signup', async (req: Request, res: Response) => {
     const { email, password, nome, telefone, rg, cpf, userType, instituicaoId }: SignUpData = req.body;
 
     if (!email || !password || !nome || !instituicaoId) {
-      return res.status(400).json({ 
-        error: 'Email, senha, nome e instituição são obrigatórios' 
+      return res.status(400).json({
+        error: 'Email, senha, nome e instituição são obrigatórios'
       });
     }
 
     if (userType && !['membro', 'backoffice'].includes(userType)) {
-      return res.status(400).json({ 
-        error: 'Tipo de usuário inválido. Use "membro" ou "backoffice"' 
+      return res.status(400).json({
+        error: 'Tipo de usuário inválido. Use "membro" ou "backoffice"'
       });
     }
 
