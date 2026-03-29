@@ -227,15 +227,35 @@ router.put('/:id', async (req, res) => {
         // 2.b Atualizar existentes e criar novos
         for (const p of produtos) {
           if (p.id) {
+            const produtoExistente = produtosExistentes.find((produtoExistente) => produtoExistente.id === p.id);
+            const exigePagamentoAtualizado = p.exigePagamento !== undefined ? p.exigePagamento : false;
+
             await prismaTransaction.produtosEvento.update({
               where: { id: p.id },
               data: {
                 nome: p.nome,
                 descricao: p.descricao || null,
                 valor: p.valor,
-                exigePagamento: p.exigePagamento !== undefined ? p.exigePagamento : false
+                exigePagamento: exigePagamentoAtualizado
               }
             });
+
+            if (produtoExistente && !produtoExistente.exigePagamento && exigePagamentoAtualizado) {
+              await prismaTransaction.participanteProdutos.updateMany({
+                where: {
+                  produtoId: p.id,
+                  parcelas: {
+                    none: {}
+                  },
+                  status: {
+                    not: 'PENDENTE'
+                  }
+                },
+                data: {
+                  status: 'PENDENTE'
+                }
+              });
+            }
           } else {
             await prismaTransaction.produtosEvento.create({
               data: {
@@ -962,6 +982,7 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
               participanteId,
               produtoId,
               valor_pago: produtoInfo.valor,
+              status: produtoInfo.exigePagamento ? 'PENDENTE' : 'PAGO',
               instituicaoId: produtoInfo.instituicaoId || null
             }
           });
