@@ -17,9 +17,13 @@ model Instituicao {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   
-  users     Users[]
-  eventos   Eventos[]
-  areas     Area[]
+  users               Users[]
+  eventos             Eventos[]
+  areas               Area[]
+  participantes       Participantes[]
+  produtosEvento      ProdutosEvento[]
+  participanteProdutos ParticipanteProdutos[]
+  parcelas            Parcela[]
 
   @@map("instituicoes")
 }
@@ -104,6 +108,7 @@ model Eventos {
 model Participantes {
   id             String   @id @default(uuid())
   eventoId       String
+  instituicaoId  String?
   nome           String
   email          String
   telefone       String
@@ -114,43 +119,77 @@ model Participantes {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   
-  evento         Eventos  @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  evento         Eventos       @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  instituicao    Instituicao?  @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   produtos       ParticipanteProdutos[]
 
   @@unique([eventoId, cpf])
   @@index([eventoId])
+  @@index([instituicaoId])
   @@map("participantes")
 }
 
 model ProdutosEvento {
-  id          String   @id @default(uuid())
-  eventoId    String
-  nome        String
-  descricao   String?
-  valor       Decimal
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(uuid())
+  eventoId       String
+  instituicaoId  String?
+  nome           String
+  descricao      String?
+  valor          Decimal
+  exigePagamento Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
   
-  evento      Eventos  @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  evento        Eventos       @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  instituicao   Instituicao?  @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   participantes ParticipanteProdutos[]
 
   @@index([eventoId])
+  @@index([instituicaoId])
   @@map("produtos_evento")
 }
 
 model ParticipanteProdutos {
-  id             String   @id @default(uuid())
-  participanteId String
-  produtoId      String
-  valor_pago     Decimal
-  data_pagamento DateTime?
-  createdAt      DateTime @default(now())
+  id                  String   @id @default(uuid())
+  participanteId      String
+  produtoId           String
+  instituicaoId       String?
+  valor_pago          Decimal
+  status              String   @default("PAGO") // PENDENTE, PARCIALMENTE_PAGO, QUITADO, PAGO
+  quantidade_parcelas Int      @default(1)
+  data_pagamento      DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @default(now()) @updatedAt
   
-  participante   Participantes @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  parcelas            Parcela[]
+  
+  participante   Participantes  @relation(fields: [participanteId], references: [id], onDelete: Cascade)
   produto        ProdutosEvento @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  instituicao    Instituicao?   @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
 
   @@unique([participanteId, produtoId])
   @@index([participanteId])
   @@index([produtoId])
+  @@index([instituicaoId])
   @@map("participante_produtos")
+}
+
+model Parcela {
+  id                     String               @id @default(uuid())
+  participanteProdutoId  String
+  instituicaoId          String?
+  valor_pago             Decimal              @default(0)
+  metodo_pagamento       String?              // Pix, Dinheiro, Débito, Crédito
+  numero_vezes           Int?                 // For credit card
+  descricao              String?
+  data_pagamento         DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @default(now()) @updatedAt
+
+  participanteProduto    ParticipanteProdutos @relation(fields: [participanteProdutoId], references: [id], onDelete: Cascade)
+  instituicao            Instituicao?         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+
+  @@index([participanteProdutoId])
+  @@index([instituicaoId])
+  @@map("parcelas")
 }
