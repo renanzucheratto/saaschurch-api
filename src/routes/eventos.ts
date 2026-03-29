@@ -40,6 +40,7 @@ router.post('/', async (req, res) => {
             descricao: produto.descricao || null,
             valor: produto.valor,
             exigePagamento: produto.exigePagamento !== undefined ? produto.exigePagamento : false,
+            oculto: produto.oculto !== undefined ? produto.oculto : false,
             instituicaoId: instituicaoId || null
           }))
         } : undefined
@@ -93,7 +94,8 @@ router.get('/', async (req, res) => {
             nome: true,
             descricao: true,
             valor: true,
-            exigePagamento: true
+            exigePagamento: true,
+            oculto: true
           }
         }
       }
@@ -138,7 +140,8 @@ router.get('/:id', async (req, res) => {
             nome: true,
             descricao: true,
             valor: true,
-            exigePagamento: true
+            exigePagamento: true,
+            oculto: true
           }
         }
       }
@@ -237,7 +240,8 @@ router.put('/:id', async (req, res) => {
                 nome: p.nome,
                 descricao: p.descricao || null,
                 valor: p.valor,
-                exigePagamento: exigePagamentoAtualizado
+                exigePagamento: exigePagamentoAtualizado,
+                oculto: p.oculto !== undefined ? p.oculto : produtoExistente?.oculto || false
               }
             });
           } else {
@@ -248,6 +252,7 @@ router.put('/:id', async (req, res) => {
                 descricao: p.descricao || null,
                 valor: p.valor,
                 exigePagamento: p.exigePagamento !== undefined ? p.exigePagamento : false,
+                oculto: p.oculto !== undefined ? p.oculto : false,
                 instituicaoId: evento.instituicaoId || null
               }
             });
@@ -404,7 +409,8 @@ router.post('/:eventoId/participantes', async (req, res) => {
                 nome: true,
                 descricao: true,
                 valor: true,
-                exigePagamento: true
+                exigePagamento: true,
+                oculto: true
               }
             }
           }
@@ -470,7 +476,8 @@ router.get('/:eventoId/participantes', async (req, res) => {
                 nome: true,
                 descricao: true,
                 valor: true,
-                exigePagamento: true
+                exigePagamento: true,
+                oculto: true
               }
             },
             parcelas: {
@@ -533,6 +540,7 @@ router.post('/:eventoId/produtos', async (req, res) => {
         descricao: descricao || null,
         valor: valor,
         exigePagamento: req.body.exigePagamento !== undefined ? req.body.exigePagamento : false,
+        oculto: req.body.oculto !== undefined ? req.body.oculto : false,
         instituicaoId: evento.instituicaoId || null
       }
     });
@@ -593,6 +601,7 @@ router.post('/:eventoId/produtos/batch', async (req, res) => {
         descricao: produto.descricao || null,
         valor: produto.valor,
         exigePagamento: produto.exigePagamento !== undefined ? produto.exigePagamento : false,
+        oculto: produto.oculto !== undefined ? produto.oculto : false,
         instituicaoId: evento.instituicaoId || null
       }))
     });
@@ -689,7 +698,8 @@ router.put('/:eventoId/produtos/:produtoId', async (req, res) => {
         nome: nome !== undefined ? nome : produto.nome,
         descricao: descricao !== undefined ? descricao : produto.descricao,
         valor: valor !== undefined ? valor : produto.valor,
-        exigePagamento: req.body.exigePagamento !== undefined ? req.body.exigePagamento : produto.exigePagamento
+        exigePagamento: req.body.exigePagamento !== undefined ? req.body.exigePagamento : produto.exigePagamento,
+        oculto: req.body.oculto !== undefined ? req.body.oculto : produto.oculto
       }
     });
 

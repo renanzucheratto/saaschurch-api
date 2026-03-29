@@ -132,6 +132,7 @@ model ProdutosEvento {
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
   exigePagamento Boolean                @default(false)
+  oculto         Boolean                @default(false)
   instituicaoId  String?
   evento         Eventos                @relation(fields: [eventoId], references: [id], onDelete: Cascade)
   instituicao    Instituicao?           @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
