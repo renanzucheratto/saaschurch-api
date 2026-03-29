@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma/client.js';
 import { verifyRecaptcha } from '../middleware/recaptcha.js';
+import { calcularStatusPagamento } from '../helpers/calcular-status-pagamento.js';
 
 const router = Router();
 
@@ -239,23 +240,6 @@ router.put('/:id', async (req, res) => {
                 exigePagamento: exigePagamentoAtualizado
               }
             });
-
-            if (produtoExistente && !produtoExistente.exigePagamento && exigePagamentoAtualizado) {
-              await prismaTransaction.participanteProdutos.updateMany({
-                where: {
-                  produtoId: p.id,
-                  parcelas: {
-                    none: {}
-                  },
-                  status: {
-                    not: 'PENDENTE'
-                  }
-                },
-                data: {
-                  status: 'PENDENTE'
-                }
-              });
-            }
           } else {
             await prismaTransaction.produtosEvento.create({
               data: {
@@ -406,7 +390,6 @@ router.post('/:eventoId/participantes', async (req, res) => {
             return {
               produtoId: produto.produtoId,
               valor_pago: produto.valor_pago || prodValido?.valor || 0,
-              status: prodValido?.exigePagamento ? 'PENDENTE' : 'PAGO',
               instituicaoId: evento.instituicaoId || null
             };
           })
@@ -507,7 +490,7 @@ router.get('/:eventoId/participantes', async (req, res) => {
         produtoId: pp.produtoId,
         nome: pp.produto?.nome || "Produto removido",
         valor: pp.produto ? parseFloat(pp.produto.valor.toString()) : parseFloat(pp.valor_pago.toString()),
-        status: pp.status,
+        status: pp.produto ? calcularStatusPagamento(pp.produto, pp.parcelas || []) : 'NAO_APLICA',
         quantidade_parcelas: pp.quantidade_parcelas,
         exigePagamento: pp.produto?.exigePagamento,
         parcelas: pp.parcelas
@@ -982,7 +965,6 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
               participanteId,
               produtoId,
               valor_pago: produtoInfo.valor,
-              status: produtoInfo.exigePagamento ? 'PENDENTE' : 'PAGO',
               instituicaoId: produtoInfo.instituicaoId || null
             }
           });
@@ -1026,7 +1008,7 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
         produtoId: pp.produtoId,
         nome: pp.produto?.nome || "Produto removido",
         valor: pp.produto ? parseFloat(pp.produto.valor.toString()) : parseFloat(pp.valor_pago.toString()),
-        status: pp.status,
+        status: pp.produto ? calcularStatusPagamento(pp.produto, pp.parcelas || []) : 'NAO_APLICA',
         quantidade_parcelas: pp.quantidade_parcelas,
         exigePagamento: pp.produto?.exigePagamento,
         parcelas: pp.parcelas
@@ -1141,25 +1123,6 @@ router.post('/:eventoId/participantes/:participanteId/produtos/:produtoId/parcel
       }
     });
 
-    // Recalcular status
-    const parcelasAtuais = await prisma.parcela.findMany({ where: { participanteProdutoId: pp.id } });
-    const totalPago = parcelasAtuais.reduce((acc, p) => acc + Number(p.valor_pago), 0);
-    const valorProduto = Number(pp.produto.valor);
-
-    let novoStatus = pp.status;
-    if (totalPago >= valorProduto) {
-      novoStatus = 'QUITADO';
-    } else if (totalPago > 0) {
-      novoStatus = 'PARCIALMENTE_PAGO';
-    } else {
-      novoStatus = 'PENDENTE';
-    }
-
-    await prisma.participanteProdutos.update({
-      where: { id: pp.id },
-      data: { status: novoStatus }
-    });
-
     res.status(201).json(novaParcela);
   } catch (error: any) {
     console.error('Erro ao criar parcela:', error);
@@ -1187,28 +1150,6 @@ router.put('/:eventoId/participantes/:participanteId/produtos/:produtoId/parcela
       }
     });
 
-    // Recalcular
-    const pp = await prisma.participanteProdutos.findUnique({
-      where: { participanteId_produtoId: { participanteId, produtoId } },
-      include: { parcelas: true, produto: true }
-    });
-    if (pp) {
-      const totalPago = pp.parcelas.reduce((acc, p) => acc + Number(p.valor_pago), 0);
-      const valorProduto = Number(pp.produto.valor);
-      let novoStatus = pp.status;
-      if (totalPago >= valorProduto) {
-        novoStatus = 'QUITADO';
-      } else if (totalPago > 0) {
-        novoStatus = 'PARCIALMENTE_PAGO';
-      } else {
-        novoStatus = 'PENDENTE';
-      }
-      await prisma.participanteProdutos.update({
-        where: { id: pp.id },
-        data: { status: novoStatus }
-      });
-    }
-
     res.json(parcelaEditada);
   } catch (error: any) {
     console.error('Erro ao editar parcela:', error);
@@ -1222,28 +1163,6 @@ router.delete('/:eventoId/participantes/:participanteId/produtos/:produtoId/parc
     const { participanteId, produtoId, parcelaId } = req.params;
     
     await prisma.parcela.delete({ where: { id: parcelaId } });
-
-    // Recalcular
-    const pp = await prisma.participanteProdutos.findUnique({
-      where: { participanteId_produtoId: { participanteId, produtoId } },
-      include: { parcelas: true, produto: true }
-    });
-    if (pp) {
-      const totalPago = pp.parcelas.reduce((acc, p) => acc + Number(p.valor_pago), 0);
-      const valorProduto = Number(pp.produto.valor);
-      let novoStatus = pp.status;
-      if (totalPago >= valorProduto) {
-        novoStatus = 'QUITADO';
-      } else if (totalPago > 0) {
-        novoStatus = 'PARCIALMENTE_PAGO';
-      } else {
-        novoStatus = 'PENDENTE';
-      }
-      await prisma.participanteProdutos.update({
-        where: { id: pp.id },
-        data: { status: novoStatus }
-      });
-    }
 
     res.status(204).send();
   } catch (error: any) {

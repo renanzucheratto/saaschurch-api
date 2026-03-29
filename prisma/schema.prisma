@@ -3,45 +3,43 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider     = "postgresql"
   relationMode = "prisma"
 }
 
 model Instituicao {
-  id        String   @id @default(uuid())
-  nome      String
-  cnpj      String?  @unique
-  endereco  String?
-  telefone  String?
-  email     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
-  users               Users[]
-  eventos             Eventos[]
-  areas               Area[]
-  participantes       Participantes[]
-  produtosEvento      ProdutosEvento[]
+  id                   String                 @id @default(uuid())
+  nome                 String
+  cnpj                 String?                @unique
+  endereco             String?
+  telefone             String?
+  email                String?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  users                Users[]
+  eventos              Eventos[]
+  areas                Area[]
+  participantes        Participantes[]
+  produtosEvento       ProdutosEvento[]
   participanteProdutos ParticipanteProdutos[]
-  parcelas            Parcela[]
+  parcelas             Parcela[]
 
   @@map("instituicoes")
 }
 
 model Users {
-  id            String   @id @default(uuid())
-  email         String   @unique
+  id            String      @id @default(uuid())
+  email         String      @unique
   nome          String
   telefone      String?
   rg            String?
-  cpf           String?  @unique
-  userType      String   @default("membro")
+  cpf           String?     @unique
+  userType      String      @default("membro")
   instituicaoId String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  active        Boolean     @default(true)
   pix_key       String?
-  active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  
   instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   eventos       Eventos[]
   areas         UserArea[]
@@ -53,12 +51,11 @@ model Users {
 }
 
 model Area {
-  id            String   @id @default(uuid())
+  id            String      @id @default(uuid())
   nome          String
   instituicaoId String
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
   instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   users         UserArea[]
 
@@ -70,9 +67,8 @@ model UserArea {
   id        String   @id @default(uuid())
   userId    String
   areaId    String
-  cargo     String   // voluntário, líder, vice-líder
+  cargo     String
   createdAt DateTime @default(now())
-
   user      Users    @relation(fields: [userId], references: [id], onDelete: Cascade)
   area      Area     @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
@@ -83,22 +79,21 @@ model UserArea {
 }
 
 model Eventos {
-  id                   String   @id @default(uuid())
-  nome                 String
-  data_inicio          DateTime
-  data_fim             DateTime
-  descricao            String?
-  selecao_unica_produto Boolean  @default(true)
-  imagem_url           String?
-  userId               String?
-  instituicaoId        String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  
-  user                 Users?       @relation(fields: [userId], references: [id])
-  instituicao          Instituicao? @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  participantes        Participantes[]
-  produtos             ProdutosEvento[]
+  id                    String           @id @default(uuid())
+  nome                  String
+  descricao             String?
+  userId                String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  data_fim              DateTime
+  data_inicio           DateTime
+  imagem_url            String?
+  instituicaoId         String?
+  selecao_unica_produto Boolean          @default(true)
+  user                  Users?           @relation(fields: [userId], references: [id])
+  instituicao           Instituicao?     @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  participantes         Participantes[]
+  produtos              ProdutosEvento[]
 
   @@index([userId])
   @@index([instituicaoId])
@@ -106,21 +101,20 @@ model Eventos {
 }
 
 model Participantes {
-  id             String   @id @default(uuid())
+  id             String                 @id @default(uuid())
   eventoId       String
-  instituicaoId  String?
   nome           String
   email          String
   telefone       String
-  rg             String
-  cpf            String
   termo_assinado Boolean
-  isDeleted      Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  
-  evento         Eventos       @relation(fields: [eventoId], references: [id], onDelete: Cascade)
-  instituicao    Instituicao?  @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  cpf            String
+  isDeleted      Boolean                @default(false)
+  rg             String
+  instituicaoId  String?
+  evento         Eventos                @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  instituicao    Instituicao?           @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   produtos       ParticipanteProdutos[]
 
   @@unique([eventoId, cpf])
@@ -130,19 +124,18 @@ model Participantes {
 }
 
 model ProdutosEvento {
-  id             String   @id @default(uuid())
+  id             String                 @id @default(uuid())
   eventoId       String
-  instituicaoId  String?
   nome           String
   descricao      String?
   valor          Decimal
-  exigePagamento Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  
-  evento        Eventos       @relation(fields: [eventoId], references: [id], onDelete: Cascade)
-  instituicao   Instituicao?  @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  participantes ParticipanteProdutos[]
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  exigePagamento Boolean                @default(false)
+  instituicaoId  String?
+  evento         Eventos                @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  instituicao    Instituicao?           @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  participantes  ParticipanteProdutos[]
 
   @@index([eventoId])
   @@index([instituicaoId])
@@ -150,22 +143,19 @@ model ProdutosEvento {
 }
 
 model ParticipanteProdutos {
-  id                  String   @id @default(uuid())
+  id                  String         @id @default(uuid())
   participanteId      String
   produtoId           String
-  instituicaoId       String?
   valor_pago          Decimal
-  status              String   @default("PAGO") // PENDENTE, PARCIALMENTE_PAGO, QUITADO, PAGO
-  quantidade_parcelas Int      @default(1)
   data_pagamento      DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @default(now()) @updatedAt
-  
+  createdAt           DateTime       @default(now())
+  quantidade_parcelas Int            @default(1)
+  updatedAt           DateTime       @default(now()) @updatedAt
+  instituicaoId       String?
   parcelas            Parcela[]
-  
-  participante   Participantes  @relation(fields: [participanteId], references: [id], onDelete: Cascade)
-  produto        ProdutosEvento @relation(fields: [produtoId], references: [id], onDelete: Cascade)
-  instituicao    Instituicao?   @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  participante        Participantes  @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  produto             ProdutosEvento @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  instituicao         Instituicao?   @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
 
   @@unique([participanteId, produtoId])
   @@index([participanteId])
@@ -175,19 +165,18 @@ model ParticipanteProdutos {
 }
 
 model Parcela {
-  id                     String               @id @default(uuid())
-  participanteProdutoId  String
-  instituicaoId          String?
-  valor_pago             Decimal              @default(0)
-  metodo_pagamento       String?              // Pix, Dinheiro, Débito, Crédito
-  numero_vezes           Int?                 // For credit card
-  descricao              String?
-  data_pagamento         DateTime?
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @default(now()) @updatedAt
-
-  participanteProduto    ParticipanteProdutos @relation(fields: [participanteProdutoId], references: [id], onDelete: Cascade)
-  instituicao            Instituicao?         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  id                    String               @id @default(uuid())
+  participanteProdutoId String
+  valor_pago            Decimal              @default(0)
+  metodo_pagamento      String?
+  numero_vezes          Int?
+  descricao             String?
+  data_pagamento        DateTime?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @default(now()) @updatedAt
+  instituicaoId         String?
+  participanteProduto   ParticipanteProdutos @relation(fields: [participanteProdutoId], references: [id], onDelete: Cascade)
+  instituicao           Instituicao?         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
 
   @@index([participanteProdutoId])
   @@index([instituicaoId])
