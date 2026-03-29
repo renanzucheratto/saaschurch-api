@@ -186,7 +186,10 @@ router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest,
 
     const updatedUser = await prisma.users.update({
       where: { id },
-      data: updateData,
+      data: {
+        ...updateData,
+        updatedByEmail: req.user?.email || null,
+      },
       include: {
         instituicao: true,
       },
@@ -292,7 +295,10 @@ router.post('/:id/change-institution', authenticateUser, requireBackoffice, asyn
 
     const updatedUser = await prisma.users.update({
       where: { id },
-      data: { instituicaoId },
+      data: { 
+        instituicaoId,
+        updatedByEmail: req.user?.email || null,
+      },
       include: {
         instituicao: true,
       },

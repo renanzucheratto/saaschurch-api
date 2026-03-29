@@ -199,6 +199,7 @@ router.put('/:id', async (req, res) => {
           descricao: descricao !== undefined ? (descricao || null) : evento.descricao,
           selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : evento.selecao_unica_produto,
           imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
+          updatedByEmail: req.body.updatedByEmail || null,
         }
       });
 
@@ -241,7 +242,8 @@ router.put('/:id', async (req, res) => {
                 descricao: p.descricao || null,
                 valor: p.valor,
                 exigePagamento: exigePagamentoAtualizado,
-                oculto: p.oculto !== undefined ? p.oculto : produtoExistente?.oculto || false
+                oculto: p.oculto !== undefined ? p.oculto : produtoExistente?.oculto || false,
+                updatedByEmail: req.body.updatedByEmail || null,
               }
             });
           } else {
@@ -699,7 +701,8 @@ router.put('/:eventoId/produtos/:produtoId', async (req, res) => {
         descricao: descricao !== undefined ? descricao : produto.descricao,
         valor: valor !== undefined ? valor : produto.valor,
         exigePagamento: req.body.exigePagamento !== undefined ? req.body.exigePagamento : produto.exigePagamento,
-        oculto: req.body.oculto !== undefined ? req.body.oculto : produto.oculto
+        oculto: req.body.oculto !== undefined ? req.body.oculto : produto.oculto,
+        updatedByEmail: req.body.updatedByEmail || null,
       }
     });
 
@@ -946,7 +949,8 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
           rg: rg || participante.rg,
           cpf: cpf ? cpf.replace(/\D/g, '') : participante.cpf,
           termo_assinado: termo_assinado !== undefined ? termo_assinado : participante.termo_assinado,
-          isDeleted: isDeleted !== undefined ? isDeleted : participante.isDeleted
+          isDeleted: isDeleted !== undefined ? isDeleted : participante.isDeleted,
+          updatedByEmail: req.body.updatedByEmail || null,
         }
       });
 
@@ -1058,7 +1062,10 @@ router.delete('/:eventoId/participantes/:participanteId', async (req, res) => {
     // Exclusão lógica: apenas atualizar a flag isDeleted
     await prisma.participantes.update({
       where: { id: participanteId },
-      data: { isDeleted: true }
+      data: { 
+        isDeleted: true,
+        updatedByEmail: req.body.updatedByEmail || null,
+      }
     });
 
     res.status(204).send();
@@ -1097,7 +1104,8 @@ router.put('/:eventoId/participantes/:participanteId/produtos/:produtoId/quantid
         }
       },
       data: {
-        quantidade_parcelas
+        quantidade_parcelas,
+        updatedByEmail: req.body.updatedByEmail || null,
       }
     });
 
@@ -1129,7 +1137,8 @@ router.post('/:eventoId/participantes/:participanteId/produtos/:produtoId/parcel
         numero_vezes,
         descricao,
         data_pagamento: data_pagamento ? new Date(data_pagamento) : new Date(),
-        instituicaoId: pp.instituicaoId || null
+        instituicaoId: pp.instituicaoId || null,
+        updatedByEmail: req.body.updatedByEmail || null,
       }
     });
 
@@ -1156,7 +1165,8 @@ router.put('/:eventoId/participantes/:participanteId/produtos/:produtoId/parcela
         metodo_pagamento: metodo_pagamento !== undefined ? metodo_pagamento : parcela.metodo_pagamento,
         numero_vezes: numero_vezes !== undefined ? numero_vezes : parcela.numero_vezes,
         descricao: descricao !== undefined ? descricao : parcela.descricao,
-        data_pagamento: data_pagamento ? new Date(data_pagamento) : parcela.data_pagamento
+        data_pagamento: data_pagamento ? new Date(data_pagamento) : parcela.data_pagamento,
+        updatedByEmail: req.body.updatedByEmail || null,
       }
     });
 

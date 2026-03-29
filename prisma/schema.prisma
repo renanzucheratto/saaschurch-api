@@ -16,6 +16,7 @@ model Instituicao {
   email                String?
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
+  updatedByEmail       String?
   users                Users[]
   eventos              Eventos[]
   areas                Area[]
@@ -38,6 +39,7 @@ model Users {
   instituicaoId String
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
+  updatedByEmail String?
   active        Boolean     @default(true)
   pix_key       String?
   instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
@@ -56,6 +58,7 @@ model Area {
   instituicaoId String
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
+  updatedByEmail String?
   instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   users         UserArea[]
 
@@ -85,6 +88,7 @@ model Eventos {
   userId                String?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
+  updatedByEmail        String?
   data_fim              DateTime
   data_inicio           DateTime
   imagem_url            String?
@@ -109,6 +113,7 @@ model Participantes {
   termo_assinado Boolean
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
+  updatedByEmail String?
   cpf            String
   isDeleted      Boolean                @default(false)
   rg             String
@@ -131,6 +136,7 @@ model ProdutosEvento {
   valor          Decimal
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
+  updatedByEmail String?
   exigePagamento Boolean                @default(false)
   oculto         Boolean                @default(false)
   instituicaoId  String?
@@ -152,6 +158,7 @@ model ParticipanteProdutos {
   createdAt           DateTime       @default(now())
   quantidade_parcelas Int            @default(1)
   updatedAt           DateTime       @default(now()) @updatedAt
+  updatedByEmail      String?
   instituicaoId       String?
   parcelas            Parcela[]
   participante        Participantes  @relation(fields: [participanteId], references: [id], onDelete: Cascade)
@@ -175,6 +182,7 @@ model Parcela {
   data_pagamento        DateTime?
   createdAt             DateTime             @default(now())
   updatedAt             DateTime             @default(now()) @updatedAt
+  updatedByEmail        String?
   instituicaoId         String?
   participanteProduto   ParticipanteProdutos @relation(fields: [participanteProdutoId], references: [id], onDelete: Cascade)
   instituicao           Instituicao?         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)

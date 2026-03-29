@@ -128,6 +128,7 @@ router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest,
         ...(endereco !== undefined && { endereco }),
         ...(telefone !== undefined && { telefone }),
         ...(email !== undefined && { email }),
+        updatedByEmail: req.user?.email || null,
       },
     });
 
