@@ -91,17 +91,31 @@ model Eventos {
   updatedByEmail        String?
   data_fim              DateTime
   data_inicio           DateTime
+  data_maxima_inscricao DateTime?
   imagem_url            String?
   instituicaoId         String?
+  limite_inscricoes     Int?
+  statusId              String?          @unique
   selecao_unica_produto Boolean          @default(true)
   user                  Users?           @relation(fields: [userId], references: [id])
   instituicao           Instituicao?     @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  status                StatusEvento?    @relation(fields: [statusId], references: [id], onDelete: SetNull)
   participantes         Participantes[]
   produtos              ProdutosEvento[]
 
   @@index([userId])
   @@index([instituicaoId])
+  @@index([statusId])
   @@map("eventos")
+}
+
+model StatusEvento {
+  id            String   @id @default(uuid())
+  nome          String
+  justificativa String?
+  evento        Eventos?
+
+  @@map("status_eventos")
 }
 
 model Participantes {

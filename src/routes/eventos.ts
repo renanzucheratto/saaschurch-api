@@ -2,8 +2,10 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma/client.js';
 import { verifyRecaptcha } from '../middleware/recaptcha.js';
 import { calcularStatusPagamento } from '../helpers/calcular-status-pagamento.js';
+import { calcularStatusEvento, serializarStatusEvento } from '../helpers/calcular-status-evento.js';
 
 const router = Router();
+const db = prisma as any;
 
 // Helper para formatar data assumindo que o banco armazena em horário de Brasília
 function formatDateToBrasilia(date: Date): string {
@@ -13,10 +15,45 @@ function formatDateToBrasilia(date: Date): string {
   return isoString.replace('Z', '-03:00');
 }
 
+function serializarEvento(evento: any) {
+  const quantidadeParticipantes = evento?._count?.participantes ?? 0;
+  const statusAtual = serializarStatusEvento({
+    status: evento?.status,
+    data_maxima_inscricao: evento?.data_maxima_inscricao,
+    limite_inscricoes: evento?.limite_inscricoes,
+    quantidadeParticipantes,
+    data_fim: evento?.data_fim,
+  });
+
+  return {
+    ...evento,
+    status: evento?.status ? {
+      ...evento.status,
+    } : null,
+    statusAtual,
+    data_inicio: evento?.data_inicio ? formatDateToBrasilia(evento.data_inicio) : null,
+    data_fim: evento?.data_fim ? formatDateToBrasilia(evento.data_fim) : null,
+    data_maxima_inscricao: evento?.data_maxima_inscricao ? formatDateToBrasilia(evento.data_maxima_inscricao) : null,
+    createdAt: evento?.createdAt ? formatDateToBrasilia(evento.createdAt) : null,
+    updatedAt: evento?.updatedAt ? formatDateToBrasilia(evento.updatedAt) : null,
+    produtos: Array.isArray(evento?.produtos)
+      ? evento.produtos.map((produto: any) => ({
+          ...produto,
+          valor: parseFloat(produto.valor.toString())
+        }))
+      : [],
+    quantidadeParticipantes,
+  };
+}
+
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
     const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId } = req.body;
+    const dataMaximaInscricao = req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null;
+    const limiteInscricoes = req.body.limite_inscricoes !== undefined && req.body.limite_inscricoes !== ''
+      ? Number(req.body.limite_inscricoes)
+      : null;
 
     if (!nome || !data_inicio || !data_fim) {
       return res.status(400).json({
@@ -24,16 +61,24 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const evento = await prisma.eventos.create({
+    const evento = await db.eventos.create({
       data: {
         nome,
         data_inicio: new Date(data_inicio),
         data_fim: new Date(data_fim),
+        data_maxima_inscricao: dataMaximaInscricao,
         descricao: descricao || null,
         selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : true,
         imagem_url: imagem_url || null,
         userId: null,
         instituicaoId: instituicaoId || null,
+        limite_inscricoes: Number.isNaN(limiteInscricoes as number) ? null : limiteInscricoes,
+        status: {
+          create: {
+            nome: 'aberto',
+            justificativa: null,
+          }
+        },
         produtos: produtos ? {
           create: produtos.map((produto: any) => ({
             nome: produto.nome,
@@ -46,21 +91,12 @@ router.post('/', async (req, res) => {
         } : undefined
       },
       include: {
+        status: true,
         produtos: true
       }
     });
 
-    const eventoFormatado = {
-      ...evento,
-      data_inicio: formatDateToBrasilia(evento.data_inicio),
-      data_fim: formatDateToBrasilia(evento.data_fim),
-      createdAt: formatDateToBrasilia(evento.createdAt),
-      updatedAt: formatDateToBrasilia(evento.updatedAt),
-      produtos: evento.produtos.map(produto => ({
-        ...produto,
-        valor: parseFloat(produto.valor.toString())
-      }))
-    };
+    const eventoFormatado = serializarEvento(evento);
 
     res.status(201).json(eventoFormatado);
   } catch (error: any) {
@@ -76,9 +112,10 @@ router.post('/', async (req, res) => {
 // GET /eventos - Listar eventos com quantidade de participantes e produtos
 router.get('/', async (req, res) => {
   try {
-    const eventos = await prisma.eventos.findMany({
+    const eventos = await db.eventos.findMany({
       orderBy: { data_inicio: 'desc' },
       include: {
+        status: true,
         _count: {
           select: {
             participantes: {
@@ -101,23 +138,7 @@ router.get('/', async (req, res) => {
       }
     });
 
-    const eventosComParticipantes = eventos.map(evento => ({
-      id: evento.id,
-      nome: evento.nome,
-      data_inicio: formatDateToBrasilia(evento.data_inicio),
-      data_fim: formatDateToBrasilia(evento.data_fim),
-      descricao: evento.descricao,
-      selecao_unica_produto: evento.selecao_unica_produto,
-      imagem_url: evento.imagem_url,
-      userId: evento.userId,
-      createdAt: formatDateToBrasilia(evento.createdAt),
-      updatedAt: formatDateToBrasilia(evento.updatedAt),
-      quantidadeParticipantes: evento._count.participantes,
-      produtos: evento.produtos.map(produto => ({
-        ...produto,
-        valor: parseFloat(produto.valor.toString())
-      }))
-    }));
+    const eventosComParticipantes = eventos.map((evento) => serializarEvento(evento));
 
     res.json(eventosComParticipantes);
   } catch (error) {
@@ -131,9 +152,10 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const evento = await prisma.eventos.findUnique({
+    const evento = await db.eventos.findUnique({
       where: { id },
       include: {
+        status: true,
         produtos: {
           select: {
             id: true,
@@ -176,9 +198,15 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, statusNome, statusJustificativa } = req.body;
+    const dataMaximaInscricao = req.body.data_maxima_inscricao !== undefined
+      ? (req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null)
+      : undefined;
+    const limiteInscricoes = req.body.limite_inscricoes !== undefined && req.body.limite_inscricoes !== ''
+      ? Number(req.body.limite_inscricoes)
+      : undefined;
 
-    const evento = await prisma.eventos.findUnique({
+    const evento = await db.eventos.findUnique({
       where: { id }
     });
 
@@ -188,24 +216,57 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    const eventoAtualizado = await prisma.$transaction(async (prismaTransaction) => {
+    const eventoAtualizado = await db.$transaction(async (prismaTransaction: any) => {
+      const tx = prismaTransaction as any;
+      let statusId = evento.statusId;
+
+      if (statusNome !== undefined) {
+        const nomeNormalizado = String(statusNome).trim().toLowerCase();
+
+        if (!['aberto', 'pausado', 'cancelado'].includes(nomeNormalizado)) {
+          throw new Error('Status inválido para atualização manual do evento');
+        }
+
+        if (evento.statusId) {
+          await tx.statusEvento.update({
+            where: { id: evento.statusId },
+            data: {
+              nome: nomeNormalizado,
+              justificativa: statusJustificativa !== undefined ? (statusJustificativa || null) : evento.status?.justificativa || null,
+            }
+          });
+        } else {
+          const novoStatus = await tx.statusEvento.create({
+            data: {
+              nome: nomeNormalizado,
+              justificativa: statusJustificativa !== undefined ? (statusJustificativa || null) : null,
+            }
+          });
+
+          statusId = novoStatus.id;
+        }
+      }
+
       // 1. Atualizar o evento em si
-      await prismaTransaction.eventos.update({
+      await tx.eventos.update({
         where: { id },
         data: {
           nome: nome !== undefined ? nome : evento.nome,
           data_inicio: data_inicio !== undefined ? new Date(data_inicio) : evento.data_inicio,
           data_fim: data_fim !== undefined ? new Date(data_fim) : evento.data_fim,
+          data_maxima_inscricao: dataMaximaInscricao !== undefined ? dataMaximaInscricao : evento.data_maxima_inscricao,
           descricao: descricao !== undefined ? (descricao || null) : evento.descricao,
           selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : evento.selecao_unica_produto,
           imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
+          limite_inscricoes: limiteInscricoes !== undefined ? (Number.isNaN(limiteInscricoes) ? null : limiteInscricoes) : evento.limite_inscricoes,
+          statusId,
           updatedByEmail: req.body.updatedByEmail || null,
         }
       });
 
       // 2. Processar produtos se o array for fornecido
       if (produtos && Array.isArray(produtos)) {
-        const produtosExistentes = await prismaTransaction.produtosEvento.findMany({
+        const produtosExistentes = await tx.produtosEvento.findMany({
           where: { eventoId: id }
         });
 
@@ -215,7 +276,7 @@ router.put('/:id', async (req, res) => {
         const produtosParaExcluir = produtosExistentes.filter(pe => !produtosInputIds.includes(pe.id));
 
         for (const p of produtosParaExcluir) {
-          const participantes = await prismaTransaction.participanteProdutos.findMany({
+          const participantes = await tx.participanteProdutos.findMany({
             where: {
               produtoId: p.id,
               participante: { isDeleted: false }
@@ -226,7 +287,7 @@ router.put('/:id', async (req, res) => {
             throw new Error(`Não é possível excluir o produto "${p.nome}" pois já há participantes inscritos`);
           }
 
-          await prismaTransaction.produtosEvento.delete({ where: { id: p.id } });
+          await tx.produtosEvento.delete({ where: { id: p.id } });
         }
 
         // 2.b Atualizar existentes e criar novos
@@ -235,7 +296,7 @@ router.put('/:id', async (req, res) => {
             const produtoExistente = produtosExistentes.find((produtoExistente) => produtoExistente.id === p.id);
             const exigePagamentoAtualizado = p.exigePagamento !== undefined ? p.exigePagamento : false;
 
-            await prismaTransaction.produtosEvento.update({
+            await tx.produtosEvento.update({
               where: { id: p.id },
               data: {
                 nome: p.nome,
@@ -247,7 +308,7 @@ router.put('/:id', async (req, res) => {
               }
             });
           } else {
-            await prismaTransaction.produtosEvento.create({
+            await tx.produtosEvento.create({
               data: {
                 eventoId: id,
                 nome: p.nome,
@@ -263,9 +324,9 @@ router.put('/:id', async (req, res) => {
       }
 
       // Retornar o evento atualizado com os produtos atualizados
-      return await prismaTransaction.eventos.findUnique({
+      return await tx.eventos.findUnique({
         where: { id },
-        include: { produtos: true }
+        include: { status: true, produtos: true }
       });
     });
 
@@ -273,17 +334,10 @@ router.put('/:id', async (req, res) => {
       throw new Error('Falha ao atualizar evento');
     }
 
-    const eventoFormatado = {
+    const eventoFormatado = serializarEvento({
       ...eventoAtualizado,
-      data_inicio: formatDateToBrasilia(eventoAtualizado.data_inicio),
-      data_fim: formatDateToBrasilia(eventoAtualizado.data_fim),
-      createdAt: formatDateToBrasilia(eventoAtualizado.createdAt),
-      updatedAt: formatDateToBrasilia(eventoAtualizado.updatedAt),
-      produtos: eventoAtualizado.produtos.map(produto => ({
-        ...produto,
-        valor: parseFloat(produto.valor.toString())
-      }))
-    };
+      _count: { participantes: 0 },
+    });
 
     res.json(eventoFormatado);
   } catch (error: any) {
@@ -324,14 +378,29 @@ router.post('/:eventoId/participantes', async (req, res) => {
       });
     }
 
-    const evento = await prisma.eventos.findUnique({
+    const evento = await db.eventos.findUnique({
       where: { id: eventoId },
-      include: { produtos: true }
+      include: { status: true, produtos: true, _count: { select: { participantes: { where: { isDeleted: false } } } } }
     });
 
     if (!evento) {
       return res.status(404).json({
         error: 'Evento não encontrado'
+      });
+    }
+
+    const statusAtual = serializarStatusEvento({
+      status: evento.status,
+      data_maxima_inscricao: evento.data_maxima_inscricao,
+      limite_inscricoes: evento.limite_inscricoes,
+      quantidadeParticipantes: evento._count.participantes,
+      data_fim: evento.data_fim,
+    });
+
+    if (statusAtual.nome !== 'aberto') {
+      return res.status(400).json({
+        error: `Não é possível realizar novas inscrições neste evento. Status atual: ${statusAtual.nome}.`,
+        status: statusAtual,
       });
     }
 
@@ -345,7 +414,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
 
       // Validar se todos os produtos selecionados existem no evento
       const produtosIds = produtos_selecionados.map((p: any) => p.produtoId).filter(Boolean);
-      produtosValidos = await prisma.produtosEvento.findMany({
+      produtosValidos = await db.produtosEvento.findMany({
         where: {
           id: { in: produtosIds },
           eventoId: eventoId
@@ -367,7 +436,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
     }
 
     // Verificar se já existe um participante ativo com este CPF no evento
-    const participanteExistente = await prisma.participantes.findFirst({
+    const participanteExistente = await db.participantes.findFirst({
       where: {
         eventoId,
         cpf: cpf.replace(/\D/g, ''),
@@ -381,7 +450,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
       });
     }
 
-    const participante = await prisma.participantes.create({
+    const participante = await db.participantes.create({
       data: {
         eventoId,
         instituicaoId: evento.instituicaoId || null,
