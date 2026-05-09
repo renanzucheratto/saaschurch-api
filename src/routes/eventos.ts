@@ -70,9 +70,10 @@ router.post('/', async (req, res) => {
         descricao: descricao || null,
         selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : true,
         imagem_url: imagem_url || null,
-        userId: null,
-        instituicaoId: instituicaoId || null,
         limite_inscricoes: Number.isNaN(limiteInscricoes as number) ? null : limiteInscricoes,
+        instituicao: instituicaoId ? {
+          connect: { id: instituicaoId }
+        } : undefined,
         status: {
           create: {
             nome: 'aberto',
@@ -86,7 +87,9 @@ router.post('/', async (req, res) => {
             valor: produto.valor,
             exigePagamento: produto.exigePagamento !== undefined ? produto.exigePagamento : false,
             oculto: produto.oculto !== undefined ? produto.oculto : false,
-            instituicaoId: instituicaoId || null
+            instituicao: instituicaoId ? {
+              connect: { id: instituicaoId }
+            } : undefined
           }))
         } : undefined
       },
