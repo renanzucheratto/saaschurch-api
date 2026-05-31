@@ -143,6 +143,19 @@ router.get('/', async (req, res) => {
 
     const eventosComParticipantes = eventos.map((evento) => serializarEvento(evento));
 
+    const statusPrioridade: Record<string, number> = {
+      'aberto': 1,
+      'pausado': 2,
+      'finalizado': 3,
+      'cancelado': 4
+    };
+
+    eventosComParticipantes.sort((a, b) => {
+      const prioridadeA = statusPrioridade[a.statusAtual.nome] || 999;
+      const prioridadeB = statusPrioridade[b.statusAtual.nome] || 999;
+      return prioridadeA - prioridadeB;
+    });
+
     res.json(eventosComParticipantes);
   } catch (error) {
     console.error('Erro ao listar eventos:', error);
