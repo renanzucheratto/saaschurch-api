@@ -24,27 +24,30 @@ model Instituicao {
   produtosEvento       ProdutosEvento[]
   participanteProdutos ParticipanteProdutos[]
   parcelas             Parcela[]
+  projetos             Projeto[]
 
   @@map("instituicoes")
 }
 
 model Users {
-  id            String      @id @default(uuid())
-  email         String      @unique
-  nome          String
-  telefone      String?
-  rg            String?
-  cpf           String?     @unique
-  userType      String      @default("membro")
-  instituicaoId String
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id             String      @id @default(uuid())
+  email          String      @unique
+  nome           String
+  telefone       String?
+  rg             String?
+  cpf            String?     @unique
+  userType       String      @default("membro") // membro | backoffice | lider | pastor | tesouraria
+  instituicaoId  String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
   updatedByEmail String?
-  active        Boolean     @default(true)
-  pix_key       String?
-  instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  eventos       Eventos[]
-  areas         UserArea[]
+  active         Boolean     @default(true)
+  pix_key        String?
+  instituicao    Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  eventos        Eventos[]
+  areas          UserArea[]
+  userRoles      UserRole[]
+  projetos       Projeto[]   @relation("ProjetoLider")
 
   @@index([instituicaoId])
   @@index([email])
@@ -53,27 +56,27 @@ model Users {
 }
 
 model Area {
-  id            String      @id @default(uuid())
-  nome          String
-  instituicaoId String
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id             String      @id @default(uuid())
+  nome           String
+  instituicaoId  String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
   updatedByEmail String?
-  instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  users         UserArea[]
+  instituicao    Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  users          UserArea[]
 
   @@index([instituicaoId])
   @@map("areas")
 }
 
 model UserArea {
-  id        String   @id @default(uuid())
-  userId    String
-  areaId    String
-  cargo     String
-  createdAt DateTime @default(now())
-  user      Users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  area      Area     @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  id         String   @id @default(uuid())
+  userId     String
+  areaId     String
+  roleNaArea String // "lider", "voluntario", "coordenador"
+  createdAt  DateTime @default(now())
+  user       Users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area       Area     @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
   @@unique([userId, areaId])
   @@index([userId])
@@ -82,12 +85,12 @@ model UserArea {
 }
 
 model Eventos {
-  id                    String           @id @default(uuid())
+  id                    String             @id @default(uuid())
   nome                  String
   descricao             String?
   userId                String?
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
   updatedByEmail        String?
   data_fim              DateTime
   data_inicio           DateTime
@@ -95,18 +98,54 @@ model Eventos {
   imagem_url            String?
   instituicaoId         String?
   limite_inscricoes     Int?
-  statusId              String?          @unique
-  selecao_unica_produto Boolean          @default(true)
-  user                  Users?           @relation(fields: [userId], references: [id])
-  instituicao           Instituicao?     @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  status                StatusEvento?    @relation(fields: [statusId], references: [id], onDelete: SetNull)
+  statusId              String?            @unique
+  selecao_unica_produto Boolean            @default(true)
+  user                  Users?             @relation(fields: [userId], references: [id])
+  instituicao           Instituicao?       @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  status                StatusEvento?      @relation(fields: [statusId], references: [id], onDelete: SetNull)
   participantes         Participantes[]
   produtos              ProdutosEvento[]
+  camposCustomizados    CampoCustomizado[]
 
   @@index([userId])
   @@index([instituicaoId])
   @@index([statusId])
   @@map("eventos")
+}
+
+model CampoCustomizado {
+  id          String                @id @default(uuid())
+  eventoId    String
+  label       String
+  tipo        String                @default("texto")
+  obrigatorio Boolean               @default(false)
+  oculto      Boolean               @default(false)
+  opcoes      Json?
+  ordem       Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  evento      Eventos               @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  respostas   RespostaCustomizada[]
+
+  @@index([eventoId])
+  @@map("campos_customizados")
+}
+
+model RespostaCustomizada {
+  id             String           @id @default(uuid())
+  participanteId String
+  campoId        String
+  valor          String?
+  valores        Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  participante   Participantes    @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+  campo          CampoCustomizado @relation(fields: [campoId], references: [id], onDelete: Cascade)
+
+  @@unique([participanteId, campoId])
+  @@index([participanteId])
+  @@index([campoId])
+  @@map("respostas_customizadas")
 }
 
 model StatusEvento {
@@ -119,22 +158,23 @@ model StatusEvento {
 }
 
 model Participantes {
-  id             String                 @id @default(uuid())
-  eventoId       String
-  nome           String
-  email          String
-  telefone       String
-  termo_assinado Boolean
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
-  updatedByEmail String?
-  cpf            String
-  isDeleted      Boolean                @default(false)
-  rg             String
-  instituicaoId  String?
-  evento         Eventos                @relation(fields: [eventoId], references: [id], onDelete: Cascade)
-  instituicao    Instituicao?           @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  produtos       ParticipanteProdutos[]
+  id                    String                 @id @default(uuid())
+  eventoId              String
+  nome                  String?
+  email                 String?
+  telefone              String?
+  termo_assinado        Boolean?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  updatedByEmail        String?
+  cpf                   String?
+  isDeleted             Boolean                @default(false)
+  rg                    String?
+  instituicaoId         String?
+  evento                Eventos                @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  instituicao           Instituicao?           @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  produtos              ParticipanteProdutos[]
+  respostasCustomizadas RespostaCustomizada[]
 
   @@unique([eventoId, cpf])
   @@index([eventoId])
@@ -204,4 +244,125 @@ model Parcela {
   @@index([participanteProdutoId])
   @@index([instituicaoId])
   @@map("parcelas")
+}
+
+// ==================== RBAC SYSTEM ====================
+
+model Role {
+  id          String           @id @default(uuid())
+  nome        String           @unique
+  descricao   String?
+  nivel       Int              @default(0) // hierarquia: admin=100, pastor=90, etc
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  userRoles   UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id        String           @id @default(uuid())
+  recurso   String // "eventos", "financeiro", "usuarios"
+  acao      String // "criar", "editar", "excluir", "visualizar"
+  descricao String?
+  createdAt DateTime         @default(now())
+  roles     RolePermission[]
+
+  @@unique([recurso, acao])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+  user      Users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+// ==================== PROJETOS ====================
+
+model Projeto {
+  id             String         @id @default(uuid())
+  nome           String
+  descricao      String?
+  ideias         String?
+  data_inicio    DateTime?
+  data_fim       DateTime?
+  instituicaoId  String
+  liderUserId    String
+  eventoId       String?
+  statusId       String?        @unique
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  updatedByEmail String?
+  instituicao    Instituicao    @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  lider          Users          @relation("ProjetoLider", fields: [liderUserId], references: [id])
+  status         StatusProjeto? @relation(fields: [statusId], references: [id], onDelete: SetNull)
+  itens          ItemProjeto[]
+  anexos         AnexoProjeto[]
+
+  @@index([instituicaoId])
+  @@index([liderUserId])
+  @@index([statusId])
+  @@map("projetos")
+}
+
+model ItemProjeto {
+  id         String   @id @default(uuid())
+  projetoId  String
+  nome       String
+  descricao  String?
+  quantidade Int      @default(1)
+  valor_unit Decimal  @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  projeto    Projeto  @relation(fields: [projetoId], references: [id], onDelete: Cascade)
+
+  @@index([projetoId])
+  @@map("itens_projeto")
+}
+
+model StatusProjeto {
+  id            String   @id @default(uuid())
+  nome          String // em_analise | aprovado | recusado | em_reembolso | liquidado | finalizado
+  justificativa String?
+  aprovadoPorId String?
+  projeto       Projeto?
+
+  @@map("status_projeto")
+}
+
+model AnexoProjeto {
+  id        String   @id @default(uuid())
+  projetoId String
+  tipo      String // nota_fiscal | comprovante_pagamento
+  nome      String
+  url       String
+  tamanho   Int?
+  createdAt DateTime @default(now())
+  projeto   Projeto  @relation(fields: [projetoId], references: [id], onDelete: Cascade)
+
+  @@index([projetoId])
+  @@map("anexos_projeto")
 }

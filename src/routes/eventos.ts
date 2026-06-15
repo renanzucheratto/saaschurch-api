@@ -7,6 +7,18 @@ import { calcularStatusEvento, serializarStatusEvento } from '../helpers/calcula
 const router = Router();
 const db = prisma as any;
 
+function validateCPFServer(cpf: string): boolean {
+  if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
+  let sum = 0;
+  for (let i = 1; i <= 9; i++) sum += +cpf[i - 1] * (11 - i);
+  let r = (sum * 10) % 11; if (r >= 10) r = 0;
+  if (r !== +cpf[9]) return false;
+  sum = 0;
+  for (let i = 1; i <= 10; i++) sum += +cpf[i - 1] * (12 - i);
+  r = (sum * 10) % 11; if (r >= 10) r = 0;
+  return r === +cpf[10];
+}
+
 // Helper para formatar data assumindo que o banco armazena em horário de Brasília
 function formatDateToBrasilia(date: Date): string {
   // O banco armazena as datas como UTC, mas são na verdade horários de Brasília
@@ -27,6 +39,7 @@ function serializarEvento(evento: any) {
 
   return {
     ...evento,
+    camposCustomizados: undefined,
     status: evento?.status ? {
       ...evento.status,
     } : null,
@@ -42,14 +55,37 @@ function serializarEvento(evento: any) {
           valor: parseFloat(produto.valor.toString())
         }))
       : [],
+    campos_customizados: serializarCamposCustomizados(evento?.camposCustomizados),
     quantidadeParticipantes,
   };
+}
+
+function serializarCamposCustomizados(campos: any): any[] {
+  if (!Array.isArray(campos)) return [];
+  return campos.map((campo: any) => ({
+    id: campo.id,
+    label: campo.label,
+    tipo: campo.tipo,
+    obrigatorio: campo.obrigatorio,
+    oculto: campo.oculto,
+    opcoes: campo.opcoes ?? null,
+    ordem: campo.ordem,
+  }));
+}
+
+function serializarRespostasCustomizadas(respostas: any): any[] {
+  if (!Array.isArray(respostas)) return [];
+  return respostas.map((resposta: any) => ({
+    campoId: resposta.campoId,
+    valor: resposta.valor ?? null,
+    valores: resposta.valores ?? null,
+  }));
 }
 
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId, campos_customizados } = req.body;
     const dataMaximaInscricao = req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null;
     const limiteInscricoes = req.body.limite_inscricoes !== undefined && req.body.limite_inscricoes !== ''
       ? Number(req.body.limite_inscricoes)
@@ -91,11 +127,22 @@ router.post('/', async (req, res) => {
               connect: { id: instituicaoId }
             } : undefined
           }))
+        } : undefined,
+        camposCustomizados: Array.isArray(campos_customizados) && campos_customizados.length > 0 ? {
+          create: campos_customizados.map((campo: any, index: number) => ({
+            label: campo.label,
+            tipo: campo.tipo || 'texto',
+            obrigatorio: campo.obrigatorio !== undefined ? campo.obrigatorio : false,
+            oculto: campo.oculto !== undefined ? campo.oculto : false,
+            opcoes: campo.opcoes ?? null,
+            ordem: campo.ordem !== undefined ? campo.ordem : index,
+          }))
         } : undefined
       },
       include: {
         status: true,
-        produtos: true
+        produtos: true,
+        camposCustomizados: { orderBy: { ordem: 'asc' } }
       }
     });
 
@@ -137,7 +184,8 @@ router.get('/', async (req, res) => {
             exigePagamento: true,
             oculto: true
           }
-        }
+        },
+        camposCustomizados: { orderBy: { ordem: 'asc' } }
       }
     });
 
@@ -181,7 +229,8 @@ router.get('/:id', async (req, res) => {
             exigePagamento: true,
             oculto: true
           }
-        }
+        },
+        camposCustomizados: { orderBy: { ordem: 'asc' } }
       }
     });
 
@@ -193,6 +242,7 @@ router.get('/:id', async (req, res) => {
 
     const eventoFormatado = {
       ...evento,
+      camposCustomizados: undefined,
       data_inicio: formatDateToBrasilia(evento.data_inicio),
       data_fim: formatDateToBrasilia(evento.data_fim),
       createdAt: formatDateToBrasilia(evento.createdAt),
@@ -200,7 +250,8 @@ router.get('/:id', async (req, res) => {
       produtos: evento.produtos.map(produto => ({
         ...produto,
         valor: parseFloat(produto.valor.toString())
-      }))
+      })),
+      campos_customizados: serializarCamposCustomizados(evento.camposCustomizados)
     };
 
     res.json(eventoFormatado);
@@ -214,7 +265,7 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, statusNome, statusJustificativa } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, statusNome, statusJustificativa, campos_customizados } = req.body;
     const dataMaximaInscricao = req.body.data_maxima_inscricao !== undefined
       ? (req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null)
       : undefined;
@@ -339,10 +390,66 @@ router.put('/:id', async (req, res) => {
         }
       }
 
+      // 3. Processar campos customizados se o array for fornecido
+      if (campos_customizados && Array.isArray(campos_customizados)) {
+        const camposExistentes = await tx.campoCustomizado.findMany({
+          where: { eventoId: id }
+        });
+
+        const camposInputIds = campos_customizados.map((c: any) => c.id).filter(Boolean);
+
+        // 3.a Validar e excluir campos que não estão mais no payload
+        const camposParaExcluir = camposExistentes.filter((ce: any) => !camposInputIds.includes(ce.id));
+
+        for (const c of camposParaExcluir) {
+          const respostas = await tx.respostaCustomizada.count({
+            where: { campoId: c.id }
+          });
+
+          if (respostas > 0) {
+            throw new Error(`O campo "${c.label}" possui respostas e não pode ser excluído. Oculte-o em vez de removê-lo.`);
+          }
+
+          await tx.respostaCustomizada.deleteMany({ where: { campoId: c.id } });
+          await tx.campoCustomizado.delete({ where: { id: c.id } });
+        }
+
+        // 3.b Atualizar existentes e criar novos (ordem = índice de posição)
+        for (let index = 0; index < campos_customizados.length; index++) {
+          const c = campos_customizados[index];
+
+          if (c.id) {
+            await tx.campoCustomizado.update({
+              where: { id: c.id },
+              data: {
+                label: c.label,
+                tipo: c.tipo || 'texto',
+                obrigatorio: c.obrigatorio !== undefined ? c.obrigatorio : false,
+                oculto: c.oculto !== undefined ? c.oculto : false,
+                opcoes: c.opcoes ?? null,
+                ordem: index,
+              }
+            });
+          } else {
+            await tx.campoCustomizado.create({
+              data: {
+                eventoId: id,
+                label: c.label,
+                tipo: c.tipo || 'texto',
+                obrigatorio: c.obrigatorio !== undefined ? c.obrigatorio : false,
+                oculto: c.oculto !== undefined ? c.oculto : false,
+                opcoes: c.opcoes ?? null,
+                ordem: index,
+              }
+            });
+          }
+        }
+      }
+
       // Retornar o evento atualizado com os produtos atualizados
       return await tx.eventos.findUnique({
         where: { id },
-        include: { status: true, produtos: true }
+        include: { status: true, produtos: true, camposCustomizados: { orderBy: { ordem: 'asc' } } }
       });
     });
 
@@ -358,7 +465,8 @@ router.put('/:id', async (req, res) => {
     res.json(eventoFormatado);
   } catch (error: any) {
     console.error('Erro ao editar evento:', error);
-    const isValidationError = error?.message?.includes('Não é possível excluir o produto');
+    const isValidationError = error?.message?.includes('Não é possível excluir o produto')
+      || error?.message?.includes('não pode ser excluído');
     res.status(isValidationError ? 400 : 500).json({
       error: isValidationError ? error.message : 'Erro interno do servidor',
       details: error?.message,
@@ -371,13 +479,7 @@ router.put('/:id', async (req, res) => {
 router.post('/:eventoId/participantes', async (req, res) => {
   try {
     const { eventoId } = req.params;
-    const { nome, email, telefone, rg, cpf, termo_assinado, produtos_selecionados, recaptchaToken } = req.body;
-
-    if (!nome || !email || !telefone || !rg || !cpf || termo_assinado === undefined) {
-      return res.status(400).json({
-        error: 'Campos obrigatórios: nome, email, telefone, rg, cpf, termo_assinado'
-      });
-    }
+    const { nome, email, telefone, rg, cpf, termo_assinado, produtos_selecionados, recaptchaToken, respostas_customizadas } = req.body;
 
     // Validar reCAPTCHA
     if (!recaptchaToken) {
@@ -396,13 +498,69 @@ router.post('/:eventoId/participantes', async (req, res) => {
 
     const evento = await db.eventos.findUnique({
       where: { id: eventoId },
-      include: { status: true, produtos: true, _count: { select: { participantes: { where: { isDeleted: false } } } } }
+      include: {
+        status: true,
+        produtos: true,
+        camposCustomizados: { where: { oculto: false }, orderBy: { ordem: 'asc' } },
+        _count: { select: { participantes: { where: { isDeleted: false } } } }
+      }
     });
 
     if (!evento) {
       return res.status(404).json({
         error: 'Evento não encontrado'
       });
+    }
+
+    const temCamposCustomizados = Array.isArray(evento.camposCustomizados) && evento.camposCustomizados.length > 0;
+
+    if (!temCamposCustomizados) {
+      // Evento sem campos customizados: validar campos padrão (comportamento atual)
+      if (!nome || !email || !telefone || !rg || !cpf || termo_assinado === undefined) {
+        return res.status(400).json({
+          error: 'Campos obrigatórios: nome, email, telefone, rg, cpf, termo_assinado'
+        });
+      }
+    } else {
+      // Evento com campos customizados: validar apenas os campos customizados obrigatórios
+      for (const campo of evento.camposCustomizados) {
+        const resposta = Array.isArray(respostas_customizadas)
+          ? respostas_customizadas.find((r: any) => r.campoId === campo.id)
+          : undefined;
+
+        if (campo.obrigatorio) {
+          const vazio = !resposta ||
+            ((resposta.valor === undefined || resposta.valor === null || String(resposta.valor).trim() === '') &&
+             (!Array.isArray(resposta.valores) || resposta.valores.length === 0));
+          if (vazio) {
+            return res.status(400).json({
+              error: `O campo "${campo.label}" é obrigatório.`
+            });
+          }
+        }
+
+        const valorStr = resposta?.valor ? String(resposta.valor).trim() : '';
+        if (valorStr) {
+          if (campo.tipo === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valorStr)) {
+            return res.status(400).json({ error: `"${campo.label}" deve ser um e-mail válido.` });
+          }
+          if (campo.tipo === 'cpf' && !validateCPFServer(valorStr.replace(/\D/g, ''))) {
+            return res.status(400).json({ error: `"${campo.label}" deve ser um CPF válido.` });
+          }
+          if (campo.tipo === 'rg') {
+            const clean = valorStr.replace(/\D/g, '');
+            if (clean.length < 7 || clean.length > 9) {
+              return res.status(400).json({ error: `"${campo.label}" deve ser um RG válido.` });
+            }
+          }
+          if (campo.tipo === 'telefone') {
+            const clean = valorStr.replace(/\D/g, '');
+            if (clean.length < 10 || clean.length > 11) {
+              return res.status(400).json({ error: `"${campo.label}" deve ser um telefone válido.` });
+            }
+          }
+        }
+      }
     }
 
     const statusAtual = serializarStatusEvento({
@@ -452,57 +610,81 @@ router.post('/:eventoId/participantes', async (req, res) => {
     }
 
     // Verificar se já existe um participante ativo com este CPF no evento
-    const participanteExistente = await db.participantes.findFirst({
-      where: {
-        eventoId,
-        cpf: cpf.replace(/\D/g, ''),
-        isDeleted: false
-      }
-    });
-
-    if (participanteExistente) {
-      return res.status(400).json({
-        error: 'Já existe um participante com este CPF cadastrado neste evento'
+    // (apenas quando não há campos customizados, pois nesse caso o CPF não é coletado)
+    if (!temCamposCustomizados) {
+      const participanteExistente = await db.participantes.findFirst({
+        where: {
+          eventoId,
+          cpf: cpf.replace(/\D/g, ''),
+          isDeleted: false
+        }
       });
+
+      if (participanteExistente) {
+        return res.status(400).json({
+          error: 'Já existe um participante com este CPF cadastrado neste evento'
+        });
+      }
     }
 
-    const participante = await db.participantes.create({
-      data: {
-        eventoId,
-        instituicaoId: evento.instituicaoId || null,
-        nome,
-        email: email.toLowerCase().trim(),
-        telefone,
-        rg,
-        cpf: cpf.replace(/\D/g, ''),
-        termo_assinado,
-        produtos: (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId) ? undefined : {
-          create: produtos_selecionados.map((produto: any) => {
-            const prodValido = produtosValidos.find((p: any) => p.id === produto.produtoId);
-            return {
-              produtoId: produto.produtoId,
-              valor_pago: produto.valor_pago || prodValido?.valor || 0,
-              instituicaoId: evento.instituicaoId || null
-            };
-          })
-        }
-      },
-      include: {
-        produtos: {
-          include: {
-            produto: {
-              select: {
-                id: true,
-                nome: true,
-                descricao: true,
-                valor: true,
-                exigePagamento: true,
-                oculto: true
+    const participante = await db.$transaction(async (tx: any) => {
+      const novoParticipante = await tx.participantes.create({
+        data: {
+          eventoId,
+          instituicaoId: evento.instituicaoId || null,
+          nome: temCamposCustomizados ? null : nome,
+          email: temCamposCustomizados ? null : email.toLowerCase().trim(),
+          telefone: temCamposCustomizados ? null : telefone,
+          rg: temCamposCustomizados ? null : rg,
+          cpf: temCamposCustomizados ? null : cpf.replace(/\D/g, ''),
+          termo_assinado: temCamposCustomizados ? null : termo_assinado,
+          produtos: (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId) ? undefined : {
+            create: produtos_selecionados.map((produto: any) => {
+              const prodValido = produtosValidos.find((p: any) => p.id === produto.produtoId);
+              return {
+                produtoId: produto.produtoId,
+                valor_pago: produto.valor_pago || prodValido?.valor || 0,
+                instituicaoId: evento.instituicaoId || null
+              };
+            })
+          }
+        },
+        include: {
+          produtos: {
+            include: {
+              produto: {
+                select: {
+                  id: true,
+                  nome: true,
+                  descricao: true,
+                  valor: true,
+                  exigePagamento: true,
+                  oculto: true
+                }
               }
             }
           }
         }
+      });
+
+      // Persistir respostas dos campos customizados (ignorando campos ocultos/desconhecidos)
+      if (temCamposCustomizados && Array.isArray(respostas_customizadas) && respostas_customizadas.length > 0) {
+        const campoIds = evento.camposCustomizados.map((c: any) => c.id);
+        const respostasValidas = respostas_customizadas
+          .filter((r: any) => campoIds.includes(r.campoId))
+          .map((r: any) => ({
+            participanteId: novoParticipante.id,
+            campoId: r.campoId,
+            valor: r.valor !== undefined ? r.valor : null,
+            valores: Array.isArray(r.valores) ? r.valores : null,
+          }));
+
+        if (respostasValidas.length > 0) {
+          await tx.respostaCustomizada.createMany({ data: respostasValidas });
+        }
       }
+
+      return novoParticipante;
     });
 
     const participanteFormatado = {
@@ -571,12 +753,14 @@ router.get('/:eventoId/participantes', async (req, res) => {
               orderBy: { createdAt: 'asc' }
             }
           }
-        }
+        },
+        respostasCustomizadas: true
       }
     });
 
     const participantesFormatados = participantes.map(participante => ({
       ...participante,
+      respostasCustomizadas: undefined,
       createdAt: formatDateToBrasilia(participante.createdAt),
       updatedAt: formatDateToBrasilia(participante.updatedAt),
       produtos: participante.produtos.map(pp => ({
@@ -588,7 +772,8 @@ router.get('/:eventoId/participantes', async (req, res) => {
         quantidade_parcelas: pp.quantidade_parcelas,
         exigePagamento: pp.produto?.exigePagamento,
         parcelas: pp.parcelas
-      }))
+      })),
+      respostas_customizadas: serializarRespostasCustomizadas((participante as any).respostasCustomizadas)
     }));
 
     res.json(participantesFormatados);
@@ -989,7 +1174,7 @@ router.get('/:eventoId/estatisticas/dayuse-retiro', async (req, res) => {
 router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
   try {
     const { eventoId, participanteId } = req.params;
-    const { nome, email, telefone, rg, cpf, termo_assinado, isDeleted, produtoId } = req.body;
+    const { nome, email, telefone, rg, cpf, termo_assinado, isDeleted, produtoId, respostas_customizadas } = req.body;
 
     const participante = await prisma.participantes.findFirst({
       where: {
@@ -1070,6 +1255,22 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
         }
       }
 
+      // Atualizar respostas dos campos customizados (delete + createMany evita N upserts em série)
+      if (Array.isArray(respostas_customizadas) && respostas_customizadas.length > 0) {
+        const respostasValidas = respostas_customizadas.filter((r: any) => r && r.campoId);
+        if (respostasValidas.length > 0) {
+          await tx.respostaCustomizada.deleteMany({ where: { participanteId } });
+          await tx.respostaCustomizada.createMany({
+            data: respostasValidas.map((r: any) => ({
+              participanteId,
+              campoId: r.campoId,
+              valor: r.valor !== undefined ? r.valor : null,
+              valores: Array.isArray(r.valores) ? r.valores : null,
+            })),
+          });
+        }
+      }
+
       // Retornar o participante completo e formatado
       return await tx.participantes.findUnique({
         where: { id: participanteId },
@@ -1089,10 +1290,11 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
                 orderBy: { createdAt: 'asc' }
               }
             }
-          }
+          },
+          respostasCustomizadas: true
         }
       });
-    });
+    }, { timeout: 15000 });
 
     if (!participanteAtualizado) {
       throw new Error('Erro ao atualizar participante');
@@ -1100,6 +1302,7 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
 
     const participanteFormatado = {
       ...participanteAtualizado,
+      respostasCustomizadas: undefined,
       createdAt: formatDateToBrasilia(participanteAtualizado.createdAt),
       updatedAt: formatDateToBrasilia(participanteAtualizado.updatedAt),
       produtos: participanteAtualizado.produtos.map(pp => ({
@@ -1111,7 +1314,8 @@ router.put('/:eventoId/participantes/:participanteId', async (req, res) => {
         quantidade_parcelas: pp.quantidade_parcelas,
         exigePagamento: pp.produto?.exigePagamento,
         parcelas: pp.parcelas
-      }))
+      })),
+      respostas_customizadas: serializarRespostasCustomizadas((participanteAtualizado as any).respostasCustomizadas)
     };
 
     res.json(participanteFormatado);

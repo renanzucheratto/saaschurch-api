@@ -2,6 +2,10 @@ import { Request, Response, NextFunction } from 'express';
 import { supabaseAuth } from '../lib/supabase/auth.js';
 import { prisma } from '../lib/prisma/client.js';
 
+export type UserType = 'membro' | 'backoffice' | 'lider' | 'pastor' | 'tesouraria';
+
+export const USER_TYPES: UserType[] = ['membro', 'backoffice', 'lider', 'pastor', 'tesouraria'];
+
 export interface AuthRequest extends Request {
   user?: {
     id: string;
@@ -10,7 +14,7 @@ export interface AuthRequest extends Request {
     telefone?: string;
     rg?: string;
     cpf?: string;
-    userType: 'membro' | 'backoffice';
+    userType: UserType;
     instituicaoId: string;
   };
 }
@@ -53,7 +57,7 @@ export async function authenticateUser(
       telefone: dbUser.telefone || undefined,
       rg: dbUser.rg || undefined,
       cpf: dbUser.cpf || undefined,
-      userType: dbUser.userType as 'membro' | 'backoffice',
+      userType: dbUser.userType as UserType,
       instituicaoId: dbUser.instituicaoId,
     };
 
@@ -97,3 +101,24 @@ export function requireSameInstitution(
 
   next();
 }
+
+// Cria um middleware que exige que o usuário tenha um dos papéis informados
+export function requireUserType(...tipos: UserType[]) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Usuário não autenticado' });
+    }
+
+    if (!tipos.includes(req.user.userType)) {
+      return res.status(403).json({ error: 'Acesso negado. Você não tem permissão para esta ação.' });
+    }
+
+    next();
+  };
+}
+
+// Aprovação de projetos: pastor, tesouraria ou backoffice
+export const requirePastorOuTesouraria = requireUserType('pastor', 'tesouraria', 'backoffice');
+
+// Liquidação de projetos: tesouraria ou backoffice
+export const requireTesouraria = requireUserType('tesouraria', 'backoffice');

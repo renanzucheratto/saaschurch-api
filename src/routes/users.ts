@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma/client.js';
 import { supabaseAdmin } from '../lib/supabase/auth.js';
-import { authenticateUser, requireBackoffice, AuthRequest } from '../middleware/auth.middleware.js';
+import { authenticateUser, requireBackoffice, AuthRequest, USER_TYPES } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
@@ -168,7 +168,7 @@ router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest,
       authUpdateData.email = email;
     }
 
-    if (userType && ['membro', 'backoffice'].includes(userType)) {
+    if (userType && USER_TYPES.includes(userType)) {
       updateData.userType = userType;
       authUpdateData.data = { ...authUpdateData.data, userType };
     }

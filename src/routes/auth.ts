@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { supabaseAdmin, supabaseAuth } from '../lib/supabase/auth.js';
 import { prisma } from '../lib/prisma/client.js';
 import { SignUpData, SignInData, UpdateUserData } from '../types/auth.types.js';
-import { authenticateUser, AuthRequest } from '../middleware/auth.middleware.js';
+import { authenticateUser, AuthRequest, USER_TYPES } from '../middleware/auth.middleware.js';
 
 const router = Router();
 
@@ -16,9 +16,9 @@ router.post('/signup', async (req: Request, res: Response) => {
       });
     }
 
-    if (userType && !['membro', 'backoffice'].includes(userType)) {
+    if (userType && !USER_TYPES.includes(userType as any)) {
       return res.status(400).json({
-        error: 'Tipo de usuário inválido. Use "membro" ou "backoffice"'
+        error: `Tipo de usuário inválido. Use um de: ${USER_TYPES.join(', ')}`
       });
     }
 
