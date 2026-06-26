@@ -3,6 +3,8 @@ import { prisma } from '../lib/prisma/client.js';
 import { verifyRecaptcha } from '../middleware/recaptcha.js';
 import { calcularStatusPagamento } from '../helpers/calcular-status-pagamento.js';
 import { calcularStatusEvento, serializarStatusEvento } from '../helpers/calcular-status-evento.js';
+import { authenticateUser, AuthRequest } from '../middleware/auth.middleware.js';
+import { enviarEmailQRCode } from '../helpers/email.js';
 
 const router = Router();
 const db = prisma as any;
@@ -85,7 +87,7 @@ function serializarRespostasCustomizadas(respostas: any): any[] {
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId, campos_customizados } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId, campos_customizados, enviar_email_qr_code } = req.body;
     const dataMaximaInscricao = req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null;
     const limiteInscricoes = req.body.limite_inscricoes !== undefined && req.body.limite_inscricoes !== ''
       ? Number(req.body.limite_inscricoes)
@@ -105,6 +107,7 @@ router.post('/', async (req, res) => {
         data_maxima_inscricao: dataMaximaInscricao,
         descricao: descricao || null,
         selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : true,
+        enviar_email_qr_code: enviar_email_qr_code !== undefined ? Boolean(enviar_email_qr_code) : false,
         imagem_url: imagem_url || null,
         limite_inscricoes: Number.isNaN(limiteInscricoes as number) ? null : limiteInscricoes,
         instituicao: instituicaoId ? {
@@ -687,11 +690,47 @@ router.post('/:eventoId/participantes', async (req, res) => {
       return novoParticipante;
     });
 
+    // Gerar token único e persistir
+    const token = crypto.randomUUID();
+    await db.participantes.update({
+      where: { id: participante.id },
+      data: { token_presenca: token },
+    });
+
+    // Determinar email e nome para envio (campos padrão ou campos customizados)
+    let emailParaEnvio: string | null = temCamposCustomizados ? null : (email || null);
+    let nomeParaEnvio: string | null = participante.nome;
+
+    if (temCamposCustomizados && Array.isArray(respostas_customizadas)) {
+      for (const campo of evento.camposCustomizados) {
+        const resposta = respostas_customizadas.find((r: any) => r.campoId === campo.id);
+        const valor = resposta?.valor ? String(resposta.valor).trim() : null;
+        if (!valor) continue;
+
+        if (campo.tipo === 'email' && !emailParaEnvio) emailParaEnvio = valor;
+        if (campo.tipo === 'texto' && /^(nome|nome completo|primeiro nome)$/i.test(campo.label) && !nomeParaEnvio) nomeParaEnvio = valor;
+      }
+    }
+
+    if (emailParaEnvio && evento.enviar_email_qr_code) {
+      // Fire-and-forget: não bloqueia a resposta 201
+      enviarEmailQRCode({
+        participanteId: participante.id,
+        participanteNome: nomeParaEnvio,
+        eventoNome: evento.nome,
+        token,
+        email: emailParaEnvio,
+      }).catch((err: any) => console.error('Erro ao enviar email QR:', JSON.stringify(err, null, 2)));
+    }
+
     const participanteFormatado = {
       ...participante,
+      token_presenca: undefined, // nunca expor o token na resposta
+      presenca_confirmada: false,
+      presenca_confirmada_em: null,
       createdAt: formatDateToBrasilia(participante.createdAt),
       updatedAt: formatDateToBrasilia(participante.updatedAt),
-      produtos: participante.produtos.map(pp => ({
+      produtos: participante.produtos.map((pp: any) => ({
         id: pp.id,
         produtoId: pp.produtoId,
         nome: pp.produto?.nome || "Produto removido",
@@ -761,8 +800,13 @@ router.get('/:eventoId/participantes', async (req, res) => {
     const participantesFormatados = participantes.map(participante => ({
       ...participante,
       respostasCustomizadas: undefined,
+      token_presenca: undefined, // nunca expor o token
       createdAt: formatDateToBrasilia(participante.createdAt),
       updatedAt: formatDateToBrasilia(participante.updatedAt),
+      presenca_confirmada: participante.presenca_confirmada,
+      presenca_confirmada_em: participante.presenca_confirmada_em
+        ? formatDateToBrasilia(participante.presenca_confirmada_em)
+        : null,
       produtos: participante.produtos.map(pp => ({
         id: pp.id,
         produtoId: pp.produtoId,
@@ -1479,5 +1523,117 @@ router.delete('/:eventoId/participantes/:participanteId/produtos/:produtoId/parc
     res.status(500).json({ error: 'Erro interno', details: error.message });
   }
 });
+
+// POST /confirmar-presenca - Confirmar presença via token do QR code (rota pública)
+router.post('/confirmar-presenca', async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token é obrigatório' });
+    }
+
+    const participante = await prisma.participantes.findUnique({
+      where: { token_presenca: token },
+      include: {
+        evento: { select: { id: true, nome: true } },
+      },
+    });
+
+    if (!participante) {
+      return res.status(404).json({ error: 'Token inválido ou participante não encontrado' });
+    }
+
+    if (participante.presenca_confirmada) {
+      return res.status(200).json({
+        jaConfirmado: true,
+        participante: { nome: participante.nome },
+        evento: { nome: participante.evento.nome },
+        presenca_confirmada_em: participante.presenca_confirmada_em
+          ? formatDateToBrasilia(participante.presenca_confirmada_em)
+          : null,
+      });
+    }
+
+    const agora = new Date();
+    await prisma.participantes.update({
+      where: { id: participante.id },
+      data: { presenca_confirmada: true, presenca_confirmada_em: agora },
+    });
+
+    return res.status(200).json({
+      jaConfirmado: false,
+      participante: { nome: participante.nome },
+      evento: { nome: participante.evento.nome },
+      presenca_confirmada_em: formatDateToBrasilia(agora),
+    });
+  } catch (error: any) {
+    console.error('Erro ao confirmar presença por token:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// PATCH /:eventoId/participantes/:participanteId/confirmar-presenca - Confirmar presença manualmente (autenticado)
+router.patch(
+  '/:eventoId/participantes/:participanteId/confirmar-presenca',
+  authenticateUser,
+  async (req: AuthRequest, res) => {
+    try {
+      const { eventoId, participanteId } = req.params as { eventoId: string; participanteId: string };
+
+      const participante = await prisma.participantes.findFirst({
+        where: { id: participanteId, eventoId },
+      });
+
+      if (!participante) {
+        return res.status(404).json({ error: 'Participante não encontrado neste evento' });
+      }
+
+      const agora = new Date();
+      const atualizado = await (db.participantes.update({
+        where: { id: participanteId },
+        data: { presenca_confirmada: true, presenca_confirmada_em: agora },
+        include: {
+          produtos: {
+            include: {
+              produto: {
+                select: { id: true, nome: true, descricao: true, valor: true, exigePagamento: true, oculto: true },
+              },
+              parcelas: { orderBy: { createdAt: 'asc' } },
+            },
+          },
+          respostasCustomizadas: true,
+        },
+      }) as Promise<any>);
+
+      const participanteFormatado = {
+        ...atualizado,
+        respostasCustomizadas: undefined,
+        token_presenca: undefined,
+        createdAt: formatDateToBrasilia(atualizado.createdAt),
+        updatedAt: formatDateToBrasilia(atualizado.updatedAt),
+        presenca_confirmada_em: atualizado.presenca_confirmada_em
+          ? formatDateToBrasilia(atualizado.presenca_confirmada_em)
+          : null,
+        produtos: atualizado.produtos.map((pp: any) => ({
+          id: pp.id,
+          produtoId: pp.produtoId,
+          nome: pp.produto?.nome || 'Produto removido',
+          valor: pp.produto ? parseFloat(pp.produto.valor.toString()) : parseFloat(pp.valor_pago.toString()),
+          status: pp.produto ? calcularStatusPagamento(pp.produto, pp.parcelas || []) : 'NAO_APLICA',
+          quantidade_parcelas: pp.quantidade_parcelas,
+          exigePagamento: pp.produto?.exigePagamento,
+          parcelas: pp.parcelas,
+        })),
+        respostas_customizadas: serializarRespostasCustomizadas(atualizado.respostasCustomizadas),
+      };
+
+      res.json(participanteFormatado);
+    } catch (error: any) {
+      console.error('Erro ao confirmar presença:', error);
+      res.status(500).json({ error: 'Erro interno do servidor' });
+    }
+  },
+);
 
 export default router;

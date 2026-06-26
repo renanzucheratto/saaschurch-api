@@ -100,6 +100,7 @@ model Eventos {
   limite_inscricoes     Int?
   statusId              String?            @unique
   selecao_unica_produto Boolean            @default(true)
+  enviar_email_qr_code  Boolean            @default(false)
   user                  Users?             @relation(fields: [userId], references: [id])
   instituicao           Instituicao?       @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   status                StatusEvento?      @relation(fields: [statusId], references: [id], onDelete: SetNull)
@@ -158,23 +159,26 @@ model StatusEvento {
 }
 
 model Participantes {
-  id                    String                 @id @default(uuid())
-  eventoId              String
-  nome                  String?
-  email                 String?
-  telefone              String?
-  termo_assinado        Boolean?
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
-  updatedByEmail        String?
-  cpf                   String?
-  isDeleted             Boolean                @default(false)
-  rg                    String?
-  instituicaoId         String?
-  evento                Eventos                @relation(fields: [eventoId], references: [id], onDelete: Cascade)
-  instituicao           Instituicao?           @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  produtos              ParticipanteProdutos[]
-  respostasCustomizadas RespostaCustomizada[]
+  id                     String                 @id @default(uuid())
+  eventoId               String
+  nome                   String?
+  email                  String?
+  telefone               String?
+  termo_assinado         Boolean?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  updatedByEmail         String?
+  cpf                    String?
+  isDeleted              Boolean                @default(false)
+  rg                     String?
+  instituicaoId          String?
+  presenca_confirmada    Boolean                @default(false)
+  presenca_confirmada_em DateTime?
+  token_presenca         String?                @unique
+  evento                 Eventos                @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  instituicao            Instituicao?           @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  produtos               ParticipanteProdutos[]
+  respostasCustomizadas  RespostaCustomizada[]
 
   @@unique([eventoId, cpf])
   @@index([eventoId])
