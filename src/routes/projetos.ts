@@ -30,17 +30,37 @@ const STATUS_VALIDOS = [
   'finalizado',
 ] as const;
 
-// Para cada status alvo: status atual exigido + papéis permitidos
+// Para cada status alvo: status atual exigido + tipos diretos + áreas com permissão
 const TRANSICOES: Record<
   string,
-  { de: string[]; papeis: UserType[]; donoPermitido: boolean }
+  { de: string[]; papeis: UserType[]; areasPermitidas: string[]; donoPermitido: boolean }
 > = {
-  aprovado: { de: ['em_analise'], papeis: ['pastor', 'tesouraria', 'backoffice'], donoPermitido: false },
-  recusado: { de: ['em_analise'], papeis: ['pastor', 'tesouraria', 'backoffice'], donoPermitido: false },
-  em_reembolso: { de: ['aprovado'], papeis: ['backoffice'], donoPermitido: true },
-  liquidado: { de: ['em_reembolso'], papeis: ['tesouraria', 'backoffice'], donoPermitido: false },
-  finalizado: { de: ['liquidado'], papeis: ['tesouraria', 'backoffice'], donoPermitido: false },
+  aprovado: { de: ['em_analise'], papeis: ['backoffice'], areasPermitidas: ['pastores', 'tesouraria'], donoPermitido: false },
+  recusado: { de: ['em_analise'], papeis: ['backoffice'], areasPermitidas: ['pastores', 'tesouraria'], donoPermitido: false },
+  em_reembolso: { de: ['aprovado'], papeis: ['backoffice'], areasPermitidas: [], donoPermitido: true },
+  liquidado: { de: ['em_reembolso'], papeis: ['backoffice'], areasPermitidas: ['tesouraria'], donoPermitido: false },
+  finalizado: { de: ['liquidado'], papeis: ['backoffice'], areasPermitidas: ['tesouraria'], donoPermitido: false },
 };
+
+async function temPermissaoTransicao(
+  userId: string,
+  userType: UserType,
+  instituicaoId: string,
+  transicao: (typeof TRANSICOES)[string],
+): Promise<boolean> {
+  if (transicao.papeis.includes(userType)) return true;
+  if (transicao.areasPermitidas.length > 0 && userType === 'lider') {
+    const userArea = await db.userArea.findFirst({
+      where: {
+        userId,
+        roleNaArea: 'lider',
+        area: { nome: { in: transicao.areasPermitidas }, instituicaoId },
+      },
+    });
+    if (userArea) return true;
+  }
+  return false;
+}
 
 function formatDateToBrasilia(date: Date | null | undefined): string | null {
   if (!date) return null;
@@ -283,8 +303,13 @@ router.put('/:id/status', async (req: AuthRequest, res: Response) => {
     }
 
     const ehDono = projeto.liderUserId === req.user!.id;
-    const temPapel = transicao.papeis.includes(req.user!.userType);
-    const permitido = temPapel || (transicao.donoPermitido && ehDono);
+    const temPermissao = await temPermissaoTransicao(
+      req.user!.id,
+      req.user!.userType,
+      req.user!.instituicaoId,
+      transicao,
+    );
+    const permitido = temPermissao || (transicao.donoPermitido && ehDono);
 
     if (!permitido) {
       return res.status(403).json({ error: 'Você não tem permissão para esta ação.' });
@@ -341,9 +366,15 @@ router.post('/:id/anexos', upload.single('arquivo'), async (req: AuthRequest, re
 
     const ehDono = projeto.liderUserId === req.user!.id;
     const ehBackoffice = req.user!.userType === 'backoffice';
-    const ehTesouraria = req.user!.userType === 'tesouraria';
+    let ehTesouraria = false;
+    if (!ehBackoffice) {
+      const userAreaTesouraria = await db.userArea.findFirst({
+        where: { userId: req.user!.id, area: { nome: 'tesouraria', instituicaoId: req.user!.instituicaoId } },
+      });
+      ehTesouraria = !!userAreaTesouraria;
+    }
 
-    // Notas fiscais: líder dono ou backoffice. Comprovantes: tesouraria ou backoffice.
+    // Notas fiscais: líder dono ou backoffice. Comprovantes: membro da tesouraria ou backoffice.
     const permitido =
       tipo === 'nota_fiscal'
         ? ehDono || ehBackoffice
@@ -393,11 +424,17 @@ router.delete('/:id/anexos/:anexoId', async (req: AuthRequest, res: Response) =>
 
     const ehDono = projeto.liderUserId === req.user!.id;
     const ehBackoffice = req.user!.userType === 'backoffice';
-    const ehTesouraria = req.user!.userType === 'tesouraria';
+    let ehTesourariaDelete = false;
+    if (!ehBackoffice) {
+      const userAreaTesourariaDelete = await db.userArea.findFirst({
+        where: { userId: req.user!.id, area: { nome: 'tesouraria', instituicaoId: req.user!.instituicaoId } },
+      });
+      ehTesourariaDelete = !!userAreaTesourariaDelete;
+    }
     const permitido =
       anexo.tipo === 'nota_fiscal'
         ? ehDono || ehBackoffice
-        : ehTesouraria || ehBackoffice;
+        : ehTesourariaDelete || ehBackoffice;
 
     if (!permitido) {
       return res.status(403).json({ error: 'Você não tem permissão para remover este anexo.' });

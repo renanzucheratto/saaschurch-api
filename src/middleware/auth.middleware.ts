@@ -2,9 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import { supabaseAuth } from '../lib/supabase/auth.js';
 import { prisma } from '../lib/prisma/client.js';
 
-export type UserType = 'membro' | 'backoffice' | 'lider' | 'pastor' | 'tesouraria';
+export type UserType = 'membro' | 'backoffice' | 'lider';
 
-export const USER_TYPES: UserType[] = ['membro', 'backoffice', 'lider', 'pastor', 'tesouraria'];
+export const USER_TYPES: UserType[] = ['membro', 'backoffice', 'lider'];
 
 export interface AuthRequest extends Request {
   user?: {
@@ -117,8 +117,4 @@ export function requireUserType(...tipos: UserType[]) {
   };
 }
 
-// Aprovação de projetos: pastor, tesouraria ou backoffice
-export const requirePastorOuTesouraria = requireUserType('pastor', 'tesouraria', 'backoffice');
-
-// Liquidação de projetos: tesouraria ou backoffice
-export const requireTesouraria = requireUserType('tesouraria', 'backoffice');
+export const requireLiderOrBackoffice = requireUserType('lider', 'backoffice');

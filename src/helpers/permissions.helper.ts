@@ -238,17 +238,10 @@ export async function getUserAreas(userId: string) {
 
 /**
  * Verifica se o usuário pode acessar uma área
- * Admin e Pastor podem acessar todas as áreas
- * Outros precisam pertencer à área
+ * Admin pode acessar todas as áreas; outros precisam pertencer à área
  */
 export async function canAccessArea(userId: string, areaId: string): Promise<boolean> {
-  // Verificar se é admin ou pastor
-  const isAdminOrPastor = await hasAnyRole(userId, ['admin', 'pastor']);
-  
-  if (isAdminOrPastor) {
-    return true;
-  }
-
-  // Verificar se pertence à área
+  const isAdmin = await hasAnyRole(userId, ['admin']);
+  if (isAdmin) return true;
   return belongsToArea(userId, areaId);
 }
