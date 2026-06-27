@@ -3,6 +3,7 @@ import { supabaseAdmin, supabaseAuth } from '../lib/supabase/auth.js';
 import { prisma } from '../lib/prisma/client.js';
 import { SignUpData, SignInData, UpdateUserData } from '../types/auth.types.js';
 import { authenticateUser, AuthRequest, USER_TYPES } from '../middleware/auth.middleware.js';
+import { enviarEmailRecuperacaoSenha } from '../helpers/email.js';
 
 const router = Router();
 
@@ -308,25 +309,43 @@ router.post('/refresh', async (req: Request, res: Response) => {
 });
 
 router.post('/forgot-password', async (req: Request, res: Response) => {
+  const GENERIC_RESPONSE = { message: 'Se este email estiver cadastrado, você receberá as instruções em breve.' };
   try {
-    const { email, redirectTo } = req.body;
+    const { email } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: 'Email é obrigatório' });
     }
 
-    const { error } = await supabaseAuth.auth.resetPasswordForEmail(email, {
-      redirectTo: redirectTo || `${process.env.FRONTEND_URL}`,
+    const { data, error } = await supabaseAdmin.auth.admin.generateLink({
+      type: 'recovery',
+      email,
+      options: { redirectTo: `${process.env.FRONTEND_URL}/set-password` },
     });
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    if (error || !data?.properties?.action_link) {
+      return res.status(200).json(GENERIC_RESPONSE);
     }
 
-    return res.status(200).json({ message: 'Email de recuperação enviado com sucesso' });
+    const user = await prisma.users.findUnique({
+      where: { email },
+      include: { instituicao: true },
+    });
+
+    if (user) {
+      const firstName = user.nome.split(' ')[0];
+      enviarEmailRecuperacaoSenha({
+        email,
+        firstName,
+        institutionName: user.instituicao.nome,
+        actionLink: data.properties.action_link,
+      }).catch((err) => console.error('Erro ao enviar email de recuperação:', err));
+    }
+
+    return res.status(200).json(GENERIC_RESPONSE);
   } catch (error) {
     console.error('Erro ao enviar email de recuperação:', error);
-    return res.status(500).json({ error: 'Erro ao enviar email de recuperação' });
+    return res.status(200).json(GENERIC_RESPONSE);
   }
 });
 

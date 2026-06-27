@@ -2,7 +2,9 @@ import { Resend } from 'resend';
 import QRCode from 'qrcode';
 import { supabaseAdmin } from '../lib/supabase/auth.js';
 
-const RESEND_TEMPLATE_ID = '0b2cad44-566e-4139-980d-931550154370';
+const RESEND_TEMPLATE_QR = '0b2cad44-566e-4139-980d-931550154370';
+const RESEND_TEMPLATE_CONVITE = '31682a05-0aaf-473a-ba7f-e2c8114ac1b9';
+const RESEND_TEMPLATE_RECUPERACAO = 'c1010b62-51c3-4a14-89d5-b3d85c79ba91';
 const QR_BUCKET = 'qrcodes';
 
 let bucketEnsured = false;
@@ -64,7 +66,7 @@ export async function enviarEmailQRCode({
     to: [email],
     ...(process.env.RESEND_FROM_EMAIL ? { from: `IFC Maravilhas <${process.env.RESEND_FROM_EMAIL}>` } : {}),
     template: {
-      id: RESEND_TEMPLATE_ID,
+      id: RESEND_TEMPLATE_QR,
       variables: {
         participant_name: participanteNome || 'Participante',
         event_name: eventoNome,
@@ -74,6 +76,62 @@ export async function enviarEmailQRCode({
   };
 
   const { error } = await resend.emails.send(payload);
+
+  if (error) throw error;
+}
+
+export async function enviarEmailConvite({
+  email,
+  nome,
+  actionLink,
+}: {
+  email: string;
+  nome: string;
+  actionLink: string;
+}): Promise<void> {
+  const resend = new Resend(process.env.RESEND_API_KEY);
+
+  const { error } = await resend.emails.send({
+    to: [email],
+    ...(process.env.RESEND_FROM_EMAIL ? { from: `IFC Maravilhas <${process.env.RESEND_FROM_EMAIL}>` } : {}),
+    template: {
+      id: RESEND_TEMPLATE_CONVITE,
+      variables: {
+        user_name: nome,
+        user_email: email,
+        create_password_url: actionLink,
+      },
+    },
+  });
+
+  if (error) throw error;
+}
+
+export async function enviarEmailRecuperacaoSenha({
+  email,
+  firstName,
+  institutionName,
+  actionLink,
+}: {
+  email: string;
+  firstName: string;
+  institutionName: string;
+  actionLink: string;
+}): Promise<void> {
+  const resend = new Resend(process.env.RESEND_API_KEY);
+
+  const { error } = await resend.emails.send({
+    to: [email],
+    ...(process.env.RESEND_FROM_EMAIL ? { from: `IFC Maravilhas <${process.env.RESEND_FROM_EMAIL}>` } : {}),
+    template: {
+      id: RESEND_TEMPLATE_RECUPERACAO,
+      variables: {
+        first_name: firstName,
+        institution_name: institutionName,
+        reset_password_url: actionLink,
+      },
+    },
+  });
 
   if (error) throw error;
 }

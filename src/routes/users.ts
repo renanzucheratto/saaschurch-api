@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma/client.js';
 import { supabaseAdmin } from '../lib/supabase/auth.js';
 import { authenticateUser, requireBackoffice, AuthRequest, USER_TYPES } from '../middleware/auth.middleware.js';
+import { enviarEmailConvite } from '../helpers/email.js';
 
 const router = Router();
 
@@ -25,22 +26,24 @@ router.post('/', authenticateUser, async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Este email já está cadastrado' });
     }
 
-    // Gerar convite via Supabase
-    // O inviteUserByEmail já envia o email se o SMTP estiver configurado no Supabase
-    const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/set-password`,
-      data: {
-        nome,
-        telefone,
-        rg,
-        cpf,
-        userType: userType || 'membro',
-        instituicaoId: finalInstituicaoId
+    const { data, error } = await supabaseAdmin.auth.admin.generateLink({
+      type: 'invite',
+      email,
+      options: {
+        redirectTo: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/set-password`,
+        data: {
+          nome,
+          telefone,
+          rg,
+          cpf,
+          userType: userType || 'membro',
+          instituicaoId: finalInstituicaoId
+        }
       }
     });
 
     if (error) {
-      console.error('Erro ao convidar usuário no Supabase:', error);
+      console.error('Erro ao gerar convite no Supabase:', error);
       return res.status(400).json({ error: error.message });
     }
 
@@ -57,6 +60,11 @@ router.post('/', authenticateUser, async (req: AuthRequest, res: Response) => {
         instituicaoId: finalInstituicaoId
       }
     });
+
+    const actionLink = data.properties.action_link;
+    enviarEmailConvite({ email, nome, actionLink }).catch((err) =>
+      console.error('Erro ao enviar email de convite:', err)
+    );
 
     return res.status(201).json({
       message: 'Usuário convidado com sucesso. Ele receberá um email para definir a senha.',
