@@ -145,7 +145,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 
     const podeEditar =
       req.user!.userType === 'backoffice' ||
-      (req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id)));
+      (req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id as string)));
 
     if (!podeEditar) {
       return res.status(403).json({ error: 'Você não tem permissão para editar esta área.' });
@@ -188,7 +188,7 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
 
     const podeRemover =
       req.user!.userType === 'backoffice' ||
-      (req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id)));
+      (req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id as string)));
 
     if (!podeRemover) {
       return res.status(403).json({ error: 'Você não tem permissão para remover esta área.' });
@@ -222,7 +222,7 @@ router.post('/:id/membros', async (req: AuthRequest, res: Response) => {
     }
 
     const isBackoffice = req.user!.userType === 'backoffice';
-    const isLider = req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id));
+    const isLider = req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id as string));
 
     // Apenas backoffice pode adicionar líderes
     if (roleNaArea === 'lider' && !isBackoffice) {
@@ -307,7 +307,7 @@ router.put('/:id/membros/:userId', async (req: AuthRequest, res: Response) => {
       });
     } else if (anteriorRole === 'lider' && roleNaArea === 'membro') {
       // Era lider e virou membro: verifica se ainda lidera outra área
-      await syncUserTypeParaMembro(req.params.userId, req.params.id);
+      await syncUserTypeParaMembro(req.params.userId as string, req.params.id as string);
     }
 
     return res.status(200).json({
@@ -338,7 +338,7 @@ router.delete('/:id/membros/:userId', async (req: AuthRequest, res: Response) =>
     }
 
     const isBackoffice = req.user!.userType === 'backoffice';
-    const isLider = req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id));
+    const isLider = req.user!.userType === 'lider' && (await isLiderDaArea(req.user!.id, req.params.id as string));
 
     // Apenas backoffice pode remover líderes
     if (userArea.roleNaArea === 'lider' && !isBackoffice) {
@@ -356,7 +356,7 @@ router.delete('/:id/membros/:userId', async (req: AuthRequest, res: Response) =>
 
     // Se era lider, verifica se ainda lidera outra área para manter ou rebaixar o cargo
     if (eraLider) {
-      await syncUserTypeParaMembro(req.params.userId);
+      await syncUserTypeParaMembro(req.params.userId as string);
     }
 
     return res.status(200).json({ message: 'Integrante removido da área com sucesso' });
