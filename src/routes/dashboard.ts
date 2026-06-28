@@ -27,6 +27,7 @@ router.get('/stats', authenticateUser, async (req: AuthRequest, res: Response) =
     const instituicaoId = req.user!.instituicaoId;
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const startOf12MonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
     const [
@@ -48,8 +49,8 @@ router.get('/stats', authenticateUser, async (req: AuthRequest, res: Response) =
       db.eventos.count({
         where: {
           OR: [
-            { instituicaoId, data_inicio: { gte: startOfMonth } },
-            { instituicaoId: null, user: { instituicaoId }, data_inicio: { gte: startOfMonth } },
+            { instituicaoId, data_inicio: { gte: startOfMonth, lt: endOfMonth }, status: { nome: 'aberto' } },
+            { instituicaoId: null, user: { instituicaoId }, data_inicio: { gte: startOfMonth, lt: endOfMonth }, status: { nome: 'aberto' } },
           ],
         },
       }),
@@ -178,7 +179,12 @@ router.get('/stats', authenticateUser, async (req: AuthRequest, res: Response) =
     const projetosPorStatus = Object.entries(statusMap).map(([status, total]) => ({ status, total }));
 
     return res.json({
-      cards: { totalMembrosAtivos, eventosMes, participantesMes },
+      cards: {
+        totalMembrosAtivos,
+        eventosMes,
+        eventosMesDescricao: 'Eventos com status: Aberto',
+        participantesMes,
+      },
       crescimentoMembros,
       eventosPorMes,
       participacaoPorEvento,
