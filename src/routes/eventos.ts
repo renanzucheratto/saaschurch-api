@@ -87,7 +87,7 @@ function serializarRespostasCustomizadas(respostas: any): any[] {
 // POST /eventos - Criar evento
 router.post('/', async (req, res) => {
   try {
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId, campos_customizados, enviar_email_qr_code } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId, campos_customizados, enviar_email_qr_code, faq } = req.body;
     const dataMaximaInscricao = req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null;
     const limiteInscricoes = req.body.limite_inscricoes !== undefined && req.body.limite_inscricoes !== ''
       ? Number(req.body.limite_inscricoes)
@@ -106,6 +106,7 @@ router.post('/', async (req, res) => {
         data_fim: new Date(data_fim),
         data_maxima_inscricao: dataMaximaInscricao,
         descricao: descricao || null,
+        faq: faq || null,
         selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : true,
         enviar_email_qr_code: enviar_email_qr_code !== undefined ? Boolean(enviar_email_qr_code) : false,
         imagem_url: imagem_url || null,
@@ -268,7 +269,7 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, statusNome, statusJustificativa, campos_customizados } = req.body;
+    const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, statusNome, statusJustificativa, campos_customizados, faq } = req.body;
     const dataMaximaInscricao = req.body.data_maxima_inscricao !== undefined
       ? (req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null)
       : undefined;
@@ -326,6 +327,7 @@ router.put('/:id', async (req, res) => {
           data_fim: data_fim !== undefined ? new Date(data_fim) : evento.data_fim,
           data_maxima_inscricao: dataMaximaInscricao !== undefined ? dataMaximaInscricao : evento.data_maxima_inscricao,
           descricao: descricao !== undefined ? (descricao || null) : evento.descricao,
+          faq: faq !== undefined ? (faq || null) : evento.faq,
           selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : evento.selecao_unica_produto,
           imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
           limite_inscricoes: limiteInscricoes !== undefined ? (Number.isNaN(limiteInscricoes) ? null : limiteInscricoes) : evento.limite_inscricoes,
