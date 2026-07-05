@@ -1,6 +1,7 @@
 import { supabaseAdmin } from './auth.js';
 
 const BUCKET = 'projetos-anexos';
+const LOGO_BUCKET = 'institution_assets';
 
 let bucketEnsured = false;
 
@@ -66,4 +67,43 @@ export async function removerAnexo(url: string): Promise<void> {
   const path = extrairPathDaUrl(url);
   if (!path) return;
   await supabaseAdmin.storage.from(BUCKET).remove([path]);
+}
+
+// ==================== Logo da instituição ====================
+// Bucket `institution_assets` já existe (criado manualmente). Cada instituição
+// tem uma pasta cujo nome é o id da instituição. No banco guardamos apenas o
+// nome do arquivo; a URL pública é derivada de id + nome do arquivo.
+
+// Faz upload do logo e retorna o nome do arquivo (a ser salvo no banco).
+export async function uploadLogo(
+  instituicaoId: string,
+  file: { originalname: string; buffer: Buffer; mimetype: string },
+): Promise<string> {
+  const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const fileName = `${Date.now()}-${safeName}`;
+  const path = `${instituicaoId}/${fileName}`;
+
+  const { error } = await supabaseAdmin.storage.from(LOGO_BUCKET).upload(path, file.buffer, {
+    contentType: file.mimetype,
+    upsert: true,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return fileName;
+}
+
+// Monta a URL pública a partir do id da instituição e do nome do arquivo.
+export function getLogoUrl(instituicaoId: string, fileName: string | null | undefined): string | null {
+  if (!fileName) return null;
+  const { data } = supabaseAdmin.storage
+    .from(LOGO_BUCKET)
+    .getPublicUrl(`${instituicaoId}/${fileName}`);
+  return data.publicUrl;
+}
+
+export async function removerLogo(instituicaoId: string, fileName: string): Promise<void> {
+  await supabaseAdmin.storage.from(LOGO_BUCKET).remove([`${instituicaoId}/${fileName}`]);
 }

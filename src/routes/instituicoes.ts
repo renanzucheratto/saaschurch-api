@@ -1,9 +1,16 @@
 import { Router, Response } from 'express';
+import multer from 'multer';
 import { prisma } from '../lib/prisma/client.js';
 import { CreateInstituicaoData, UpdateInstituicaoData } from '../types/instituicao.types.js';
 import { authenticateUser, requireBackoffice, AuthRequest } from '../middleware/auth.middleware.js';
+import { uploadLogo, removerLogo, getLogoUrl } from '../lib/supabase/storage.js';
 
 const router = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
 
 router.post('/', async (req: AuthRequest, res: Response) => {
   try {
@@ -59,7 +66,9 @@ router.get('/', authenticateUser, requireBackoffice, async (req: AuthRequest, re
       },
     });
 
-    return res.status(200).json(instituicoes);
+    return res.status(200).json(
+      instituicoes.map((i) => ({ ...i, logoUrl: getLogoUrl(i.id, i.logoFileName) }))
+    );
   } catch (error) {
     console.error('Erro ao listar instituições:', error);
     return res.status(500).json({ error: 'Erro ao listar instituições' });
@@ -90,7 +99,10 @@ router.get('/:id', authenticateUser, async (req: AuthRequest, res: Response) => 
       return res.status(404).json({ error: 'Instituição não encontrada' });
     }
 
-    return res.status(200).json(instituicao);
+    return res.status(200).json({
+      ...instituicao,
+      logoUrl: getLogoUrl(instituicao.id, instituicao.logoFileName),
+    });
   } catch (error) {
     console.error('Erro ao buscar instituição:', error);
     return res.status(500).json({ error: 'Erro ao buscar instituição' });
@@ -134,7 +146,10 @@ router.put('/:id', authenticateUser, requireBackoffice, async (req: AuthRequest,
 
     return res.status(200).json({
       message: 'Instituição atualizada com sucesso',
-      instituicao: updatedInstituicao,
+      instituicao: {
+        ...updatedInstituicao,
+        logoUrl: getLogoUrl(updatedInstituicao.id, updatedInstituicao.logoFileName),
+      },
     });
   } catch (error) {
     console.error('Erro ao atualizar instituição:', error);
@@ -246,5 +261,60 @@ router.get('/:id/eventos', authenticateUser, async (req: AuthRequest, res: Respo
     return res.status(500).json({ error: 'Erro ao listar eventos' });
   }
 });
+
+// ==================== POST /:id/logo ====================
+router.post(
+  '/:id/logo',
+  authenticateUser,
+  requireBackoffice,
+  upload.single('logo'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+      if (req.user!.userType !== 'backoffice' || req.user!.instituicaoId !== id) {
+        return res.status(403).json({ error: 'Acesso negado' });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ error: 'Arquivo de logo é obrigatório' });
+      }
+
+      if (!req.file.mimetype.startsWith('image/')) {
+        return res.status(400).json({ error: 'O logo deve ser uma imagem' });
+      }
+
+      const instituicao = await prisma.instituicao.findUnique({ where: { id } });
+
+      if (!instituicao) {
+        return res.status(404).json({ error: 'Instituição não encontrada' });
+      }
+
+      const fileName = await uploadLogo(id, {
+        originalname: req.file.originalname,
+        buffer: req.file.buffer,
+        mimetype: req.file.mimetype,
+      });
+
+      // Remove logo anterior (best-effort)
+      if (instituicao.logoFileName && instituicao.logoFileName !== fileName) {
+        await removerLogo(id, instituicao.logoFileName).catch(() => undefined);
+      }
+
+      const updated = await prisma.instituicao.update({
+        where: { id },
+        data: { logoFileName: fileName, updatedByEmail: req.user?.email || null },
+      });
+
+      return res.status(200).json({
+        message: 'Logo atualizado com sucesso',
+        instituicao: { ...updated, logoUrl: getLogoUrl(id, fileName) },
+      });
+    } catch (error) {
+      console.error('Erro ao enviar logo:', error);
+      return res.status(500).json({ error: 'Erro ao enviar logo' });
+    }
+  }
+);
 
 export default router;

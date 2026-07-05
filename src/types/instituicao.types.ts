@@ -21,6 +21,7 @@ export interface Instituicao {
   endereco?: string;
   telefone?: string;
   email?: string;
+  logoFileName?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma/client.js';
 import { SignUpData, SignInData, UpdateUserData } from '../types/auth.types.js';
 import { authenticateUser, AuthRequest, USER_TYPES } from '../middleware/auth.middleware.js';
 import { enviarEmailRecuperacaoSenha } from '../helpers/email.js';
+import { getLogoUrl } from '../lib/supabase/storage.js';
 
 const router = Router();
 
@@ -87,6 +88,7 @@ router.post('/signup', async (req: Request, res: Response) => {
         instituicao: {
           id: instituicao.id,
           nome: instituicao.nome,
+          logoUrl: getLogoUrl(instituicao.id, instituicao.logoFileName),
         },
       },
     });
@@ -137,6 +139,7 @@ router.post('/signin', async (req: Request, res: Response) => {
         instituicao: {
           id: user.instituicao.id,
           nome: user.instituicao.nome,
+          logoUrl: getLogoUrl(user.instituicao.id, user.instituicao.logoFileName),
         },
       },
       session: {
@@ -193,6 +196,7 @@ router.get('/me', authenticateUser, async (req: AuthRequest, res: Response) => {
       instituicao: {
         id: user.instituicao.id,
         nome: user.instituicao.nome,
+        logoUrl: getLogoUrl(user.instituicao.id, user.instituicao.logoFileName),
       },
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
@@ -269,6 +273,7 @@ router.put('/me', authenticateUser, async (req: AuthRequest, res: Response) => {
         instituicao: {
           id: user.instituicao.id,
           nome: user.instituicao.nome,
+          logoUrl: getLogoUrl(user.instituicao.id, user.instituicao.logoFileName),
         },
       },
     });
