@@ -2,11 +2,12 @@ import { Router, Response } from 'express';
 import { prisma } from '../lib/prisma/client.js';
 import { supabaseAdmin } from '../lib/supabase/auth.js';
 import { authenticateUser, requireBackoffice, AuthRequest, USER_TYPES } from '../middleware/auth.middleware.js';
+import { requireLimite } from '../middleware/require-plano.middleware.js';
 import { enviarEmailConvite } from '../helpers/email.js';
 
 const router = Router();
 
-router.post('/', authenticateUser, async (req: AuthRequest, res: Response) => {
+router.post('/', authenticateUser, requireLimite('usuarios'), async (req: AuthRequest, res: Response) => {
   try {
     const { email, nome, telefone, rg, cpf, userType, instituicaoId } = req.body;
 

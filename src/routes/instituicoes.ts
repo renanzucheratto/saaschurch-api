@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma/client.js';
 import { CreateInstituicaoData, UpdateInstituicaoData } from '../types/instituicao.types.js';
 import { authenticateUser, requireBackoffice, AuthRequest } from '../middleware/auth.middleware.js';
 import { uploadLogo, removerLogo, getLogoUrl } from '../lib/supabase/storage.js';
+import { serializarPlano } from '../services/plano.service.js';
 
 const router = Router();
 
@@ -54,6 +55,9 @@ router.get('/', authenticateUser, requireBackoffice, async (req: AuthRequest, re
   try {
     const instituicoes = await prisma.instituicao.findMany({
       include: {
+        plano: true,
+        // A assinatura mais recente basta: a UI só precisa do estado corrente.
+        assinaturas: { orderBy: { createdAt: 'desc' }, take: 1 },
         _count: {
           select: {
             users: true,
@@ -67,13 +71,52 @@ router.get('/', authenticateUser, requireBackoffice, async (req: AuthRequest, re
     });
 
     return res.status(200).json(
-      instituicoes.map((i) => ({ ...i, logoUrl: getLogoUrl(i.id, i.logoFileName) }))
+      instituicoes.map(({ assinaturas, plano, ...instituicao }) => ({
+        ...instituicao,
+        logoUrl: getLogoUrl(instituicao.id, instituicao.logoFileName),
+        plano: plano ? serializarPlano(plano) : null,
+        assinaturaStatus: assinaturas[0]?.status ?? null,
+      }))
     );
   } catch (error) {
     console.error('Erro ao listar instituições:', error);
     return res.status(500).json({ error: 'Erro ao listar instituições' });
   }
 });
+
+// ==================== PATCH /:id/parceiro-piloto ====================
+// Flag informativa/auditoria. Nenhuma decisão de gating a consulta (RN-02).
+router.patch(
+  '/:id/parceiro-piloto',
+  authenticateUser,
+  requireBackoffice,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const { parceiroPiloto } = req.body as { parceiroPiloto?: boolean };
+
+      if (typeof parceiroPiloto !== 'boolean') {
+        return res.status(400).json({ error: 'parceiroPiloto deve ser booleano' });
+      }
+
+      const instituicao = await prisma.instituicao.findUnique({ where: { id } });
+
+      if (!instituicao) {
+        return res.status(404).json({ error: 'Instituição não encontrada' });
+      }
+
+      const atualizada = await prisma.instituicao.update({
+        where: { id },
+        data: { parceiroPiloto, updatedByEmail: req.user?.email || null },
+      });
+
+      return res.status(200).json({ parceiroPiloto: atualizada.parceiroPiloto });
+    } catch (error) {
+      console.error('Erro ao atualizar flag de parceiro piloto:', error);
+      return res.status(500).json({ error: 'Erro ao atualizar parceiro piloto' });
+    }
+  }
+);
 
 router.get('/:id', authenticateUser, async (req: AuthRequest, res: Response) => {
   try {

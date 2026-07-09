@@ -4,6 +4,7 @@ import { verifyRecaptcha } from '../middleware/recaptcha.js';
 import { calcularStatusPagamento } from '../helpers/calcular-status-pagamento.js';
 import { calcularStatusEvento, serializarStatusEvento } from '../helpers/calcular-status-evento.js';
 import { authenticateUser, AuthRequest } from '../middleware/auth.middleware.js';
+import { requireLimite } from '../middleware/require-plano.middleware.js';
 import { enviarEmailQRCode } from '../helpers/email.js';
 
 const router = Router();
@@ -85,7 +86,7 @@ function serializarRespostasCustomizadas(respostas: any): any[] {
 }
 
 // POST /eventos - Criar evento
-router.post('/', async (req, res) => {
+router.post('/', authenticateUser, requireLimite('eventosAtivos'), async (req, res) => {
   try {
     const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId, campos_customizados, enviar_email_qr_code, faq } = req.body;
     const dataMaximaInscricao = req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null;

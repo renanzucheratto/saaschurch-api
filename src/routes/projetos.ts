@@ -6,6 +6,7 @@ import {
   AuthRequest,
   UserType,
 } from '../middleware/auth.middleware.js';
+import { requireFeature } from '../middleware/require-plano.middleware.js';
 import { uploadAnexo, removerAnexo } from '../lib/supabase/storage.js';
 
 const router = Router();
@@ -126,7 +127,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 });
 
 // ==================== POST /projetos ====================
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', requireFeature('projetos'), async (req: AuthRequest, res: Response) => {
   try {
     if (!podeCriar(req.user!.userType)) {
       return res.status(403).json({ error: 'Apenas líderes podem criar projetos.' });

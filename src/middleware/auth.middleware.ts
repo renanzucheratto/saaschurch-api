@@ -2,9 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import { supabaseAuth } from '../lib/supabase/auth.js';
 import { prisma } from '../lib/prisma/client.js';
 
-export type UserType = 'membro' | 'backoffice' | 'lider';
+export type UserType = 'membro' | 'backoffice' | 'lider' | 'pastor' | 'tesouraria';
 
-export const USER_TYPES: UserType[] = ['membro', 'backoffice', 'lider'];
+export const USER_TYPES: UserType[] = ['membro', 'backoffice', 'lider', 'pastor', 'tesouraria'];
 
 export interface AuthRequest extends Request {
   user?: {

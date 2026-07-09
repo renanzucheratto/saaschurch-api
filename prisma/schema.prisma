@@ -1,5 +1,8 @@
 generator client {
   provider = "prisma-client-js"
+  // Sem `output` explícito, o pnpm gera dentro de um diretório do store que o
+  // `tsc` não alcança — `@prisma/client` compila como se não exportasse nada.
+  output   = "../node_modules/.prisma/client"
 }
 
 datasource db {
@@ -18,6 +21,11 @@ model Instituicao {
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
   updatedByEmail       String?
+  planoId              String?
+  parceiroPiloto       Boolean                @default(false)
+  planoAtribuidoEm     DateTime?
+  planoAtribuidoPor    String?
+  plano                Plano?                 @relation(fields: [planoId], references: [id])
   users                Users[]
   eventos              Eventos[]
   areas                Area[]
@@ -26,7 +34,11 @@ model Instituicao {
   participanteProdutos ParticipanteProdutos[]
   parcelas             Parcela[]
   projetos             Projeto[]
+  mercadoPagoAccount   MercadoPagoAccount?
+  assinaturas          Assinatura[]
+  pagamentos           Pagamento[]
 
+  @@index([planoId])
   @@map("instituicoes")
 }
 
@@ -162,6 +174,7 @@ model StatusEvento {
 
 model Participantes {
   id                     String                 @id @default(uuid())
+  pagamentos             Pagamento[]
   eventoId               String
   nome                   String?
   email                  String?
@@ -221,6 +234,7 @@ model ParticipanteProdutos {
   updatedByEmail      String?
   instituicaoId       String?
   parcelas            Parcela[]
+  pagamentos          Pagamento[]
   participante        Participantes  @relation(fields: [participanteId], references: [id], onDelete: Cascade)
   produto             ProdutosEvento @relation(fields: [produtoId], references: [id], onDelete: Cascade)
   instituicao         Instituicao?   @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
@@ -246,6 +260,7 @@ model Parcela {
   instituicaoId         String?
   participanteProduto   ParticipanteProdutos @relation(fields: [participanteProdutoId], references: [id], onDelete: Cascade)
   instituicao           Instituicao?         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  pagamento             Pagamento?
 
   @@index([participanteProdutoId])
   @@index([instituicaoId])
@@ -371,4 +386,179 @@ model AnexoProjeto {
 
   @@index([projetoId])
   @@map("anexos_projeto")
+}
+
+// ==================== PLANOS E PAGAMENTOS ====================
+
+model Plano {
+  id        String  @id @default(uuid())
+  codigo    String  @unique // PILOTO_FREE | ESSENCIAL | PRO
+  nome      String
+  descricao String?
+
+  // Cobrança de assinatura SaaS
+  cobrancaSaaS        Boolean  @default(true) // false => plano gratuito, nunca gera Assinatura
+  valorMensal         Decimal  @default(0)
+  valorAnual          Decimal?
+  mpPreapprovalPlanId String? // id do plano no MP (só se cobrancaSaaS)
+
+  // Fee sobre pagamentos de evento (split)
+  feeEventoPercentual Decimal  @default(0) // ex.: 3.50 == 3,5%
+  feeEventoMinimo     Decimal  @default(0) // piso em R$ por transação
+  feeEventoMaximo     Decimal? // teto em R$ por transação (null = sem teto)
+
+  // Limites / features
+  limiteEventosAtivos Int? // null = ilimitado
+  limiteUsuarios      Int? // null = ilimitado
+  features            Json @default("{}")
+
+  ativo Boolean @default(true)
+  ordem Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  instituicoes Instituicao[]
+  assinaturas  Assinatura[]
+
+  @@index([codigo])
+  @@map("planos")
+}
+
+model MercadoPagoAccount {
+  id            String      @id @default(uuid())
+  instituicaoId String      @unique
+  instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+
+  mpUserId     String // user_id do MP da igreja
+  accessToken  String // AES-256-GCM em repouso
+  refreshToken String // AES-256-GCM em repouso
+  publicKey    String // usado pelo Payment Brick no frontend
+  scope        String?
+  expiresAt    DateTime
+  status       MercadoPagoAccountStatus @default(PENDING)
+
+  ultimoRefreshEm DateTime?
+  ultimoErro      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([instituicaoId])
+  @@index([status])
+  @@map("mercado_pago_accounts")
+}
+
+enum MercadoPagoAccountStatus {
+  PENDING // OAuth iniciado, aguardando autorização
+  ACTIVE // conectado e funcional
+  EXPIRED // token expirado, precisa reautorizar
+  REVOKED // igreja desconectou
+}
+
+// Nonce de uso único do `state` do OAuth. Consumido no callback (SPEC-BE-002).
+model OAuthNonce {
+  nonce         String    @id
+  instituicaoId String
+  consumidoEm   DateTime?
+  expiraEm      DateTime
+  createdAt     DateTime  @default(now())
+
+  @@index([expiraEm])
+  @@map("oauth_nonces")
+}
+
+model Assinatura {
+  id            String      @id @default(uuid())
+  instituicaoId String
+  instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+
+  planoId String
+  plano   Plano  @relation(fields: [planoId], references: [id])
+
+  mpPreapprovalId    String           @unique
+  valor              Decimal
+  periodicidade      String           @default("mensal") // mensal | anual
+  status             AssinaturaStatus @default(PENDING)
+  proximaCobranca    DateTime?
+  canceladaEm        DateTime?
+  motivoCancelamento String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([instituicaoId])
+  @@index([planoId])
+  @@index([status])
+  @@map("assinaturas")
+}
+
+enum AssinaturaStatus {
+  PENDING
+  AUTHORIZED
+  PAUSED
+  CANCELLED
+}
+
+model Pagamento {
+  id            String      @id @default(uuid())
+  instituicaoId String
+  instituicao   Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+
+  participanteId String
+  participante   Participantes @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+
+  participanteProdutoId String?
+  participanteProduto   ParticipanteProdutos? @relation(fields: [participanteProdutoId], references: [id])
+
+  parcelaId String?  @unique
+  parcela   Parcela? @relation(fields: [parcelaId], references: [id])
+
+  mpPaymentId    String          @unique
+  idempotencyKey String          @unique // header X-Idempotency-Key enviado ao MP
+  status         PagamentoStatus @default(PENDING)
+  statusDetail   String?
+
+  valor                 Decimal
+  applicationFee        Decimal // snapshot da comissão no momento da criação
+  feePercentualAplicado Decimal // snapshot do Plano.feeEventoPercentual usado
+  metodoPagamento       String? // credit_card | pix | bolbradesco
+  parcelasCartao        Int     @default(1)
+
+  aprovadoEm DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([instituicaoId])
+  @@index([participanteId])
+  @@index([participanteProdutoId])
+  @@index([status])
+  @@index([status, createdAt]) // suporta o job de reconciliação (SPEC-BE-006)
+  @@map("pagamentos")
+}
+
+enum PagamentoStatus {
+  PENDING
+  IN_PROCESS
+  APPROVED
+  REJECTED
+  REFUNDED
+  CANCELLED
+}
+
+model WebhookLog {
+  id           String    @id @default(uuid())
+  mpEventId    String // data.id do MP
+  tipo         String // payment | subscription_preapproval
+  action       String? // payment.created | payment.updated
+  payload      Json
+  processado   Boolean   @default(false)
+  erro         String?
+  tentativas   Int       @default(0)
+  processadoEm DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([mpEventId, tipo, action])
+  @@index([processado])
+  @@map("webhook_logs")
 }

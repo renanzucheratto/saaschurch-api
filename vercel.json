@@ -5,6 +5,11 @@
       "maxDuration": 10
     }
   },
+  "crons": [
+    { "path": "/jobs/refresh-tokens", "schedule": "0 3 * * *" },
+    { "path": "/jobs/reconciliar-pagamentos", "schedule": "*/30 * * * *" },
+    { "path": "/jobs/verificar-assinaturas", "schedule": "0 4 * * *" }
+  ],
   "routes": [
     {
       "src": "/(.*)",
