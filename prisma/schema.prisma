@@ -26,6 +26,11 @@ model Instituicao {
   participanteProdutos ParticipanteProdutos[]
   parcelas             Parcela[]
   projetos             Projeto[]
+  contasBancarias      ContaBancaria[]
+  categoriasFinanceiras CategoriaFinanceira[]
+  fornecedores         Fornecedor[]
+  transacoesBancarias  TransacaoBancaria[]
+  regrasConciliacao    RegraConciliacao[]
 
   @@map("instituicoes")
 }
@@ -65,6 +70,8 @@ model Area {
   updatedByEmail String?
   instituicao    Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   users          UserArea[]
+  transacoesBancarias TransacaoBancaria[]
+  regrasConciliacao   RegraConciliacao[]
 
   @@index([instituicaoId])
   @@map("areas")
@@ -327,6 +334,8 @@ model Projeto {
   status         StatusProjeto? @relation(fields: [statusId], references: [id], onDelete: SetNull)
   itens          ItemProjeto[]
   anexos         AnexoProjeto[]
+  transacoesBancarias TransacaoBancaria[]
+  regrasConciliacao   RegraConciliacao[]
 
   @@index([instituicaoId])
   @@index([liderUserId])
@@ -357,6 +366,139 @@ model StatusProjeto {
   projeto       Projeto?
 
   @@map("status_projeto")
+}
+
+// ==================== FINANCEIRO / CONCILIACAO ====================
+
+model ContaBancaria {
+  id               String      @id @default(uuid())
+  instituicaoId    String
+  banco            String // "237" = Bradesco
+  agencia          String
+  conta            String
+  digito           String?
+  descricao        String?
+  saldoInicial     Decimal     @default(0) // ponto de partida da conciliação
+  dataSaldoInicial DateTime? // lançamentos anteriores a esta data não são importados
+  ativo            Boolean     @default(true)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  updatedByEmail   String?
+  instituicao      Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  transacoes       TransacaoBancaria[]
+
+  @@index([instituicaoId])
+  @@map("contas_bancarias")
+}
+
+model CategoriaFinanceira {
+  id             String      @id @default(uuid())
+  nome           String
+  tipo           String // RECEITA | DESPESA
+  instituicaoId  String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  updatedByEmail String?
+  instituicao    Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  transacoes     TransacaoBancaria[]
+  regras         RegraConciliacao[]
+
+  @@unique([instituicaoId, nome, tipo])
+  @@index([instituicaoId])
+  @@map("categorias_financeiras")
+}
+
+model Fornecedor {
+  id             String      @id @default(uuid())
+  nome           String
+  cnpjCpf        String?
+  telefone       String?
+  email          String?
+  observacao     String?
+  instituicaoId  String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  updatedByEmail String?
+  instituicao    Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  transacoes     TransacaoBancaria[]
+  regras         RegraConciliacao[]
+
+  @@unique([instituicaoId, nome])
+  @@index([instituicaoId])
+  @@map("fornecedores")
+}
+
+model TransacaoBancaria {
+  id              String   @id @default(uuid())
+  contaBancariaId String
+  instituicaoId   String
+  dataMovimento   DateTime
+  valor           Decimal
+  tipo            String // CREDITO | DEBITO
+  codigoBanco     String // codigoLancamento do Bradesco
+  descricaoBanco  String // descritivoLancamentoCompleto
+  descricaoAbrev  String? // descritivoLancamentoAbreviado
+  historico       String? // segundaLinhalLancamento
+  documento       String? // numeroDocumento
+  saldoApos       Decimal?
+  hashDedup       String   @unique // sha256(conta|data|doc|codigo|sinal|valor)
+  categoriaId     String?
+  fornecedorId    String?
+  projetoId       String?
+  areaId          String?
+  conciliada      Boolean  @default(false)
+  regraAplicadaId String? // regra que classificou automaticamente
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  updatedByEmail  String?
+
+  contaBancaria ContaBancaria        @relation(fields: [contaBancariaId], references: [id], onDelete: Cascade)
+  instituicao   Instituicao          @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  categoria     CategoriaFinanceira? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  fornecedor    Fornecedor?          @relation(fields: [fornecedorId], references: [id], onDelete: SetNull)
+  projeto       Projeto?             @relation(fields: [projetoId], references: [id], onDelete: SetNull)
+  area          Area?                @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  @@index([contaBancariaId])
+  @@index([instituicaoId])
+  @@index([dataMovimento])
+  @@index([categoriaId])
+  @@index([fornecedorId])
+  @@index([projetoId])
+  @@index([areaId])
+  @@map("transacoes_bancarias")
+}
+
+model RegraConciliacao {
+  id             String  @id @default(uuid())
+  instituicaoId  String
+  nome           String?
+  campo          String // historico | descricao | codigo | valor
+  operador       String // contains | equals | starts_with | greater_than | less_than
+  valor          String
+  tipoTransacao  String? // CREDITO | DEBITO | null = ambos
+  categoriaId    String?
+  fornecedorId   String?
+  projetoId      String?
+  areaId         String?
+  prioridade     Int     @default(0) // menor = avaliada primeiro
+  ativo          Boolean @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  updatedByEmail String?
+
+  instituicao Instituicao          @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  categoria   CategoriaFinanceira? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  fornecedor  Fornecedor?          @relation(fields: [fornecedorId], references: [id], onDelete: SetNull)
+  projeto     Projeto?             @relation(fields: [projetoId], references: [id], onDelete: SetNull)
+  area        Area?                @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  @@index([instituicaoId])
+  @@index([categoriaId])
+  @@index([fornecedorId])
+  @@index([projetoId])
+  @@index([areaId])
+  @@map("regras_conciliacao")
 }
 
 model AnexoProjeto {
