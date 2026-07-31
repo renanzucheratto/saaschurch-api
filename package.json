@@ -17,6 +17,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate:status": "prisma migrate status",
     "prisma:studio": "prisma studio",
+    "prisma:seed:planos": "tsx prisma/seed-planos.ts",
     "prisma:format": "prisma format",
     "prisma:reset": "prisma migrate reset",
     "postinstall": "prisma generate"
@@ -29,6 +30,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.18.2",
+    "mercadopago": "^3.2.1",
     "multer": "^2.1.1",
     "pg": "^8.13.1",
     "qrcode": "^1.5.4",

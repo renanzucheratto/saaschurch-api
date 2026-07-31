@@ -1,0 +1,95 @@
+import { Router, Request, Response } from 'express';
+import { prisma } from '../lib/prisma/client.js';
+import { decryptToken, encryptToken } from '../lib/mercadopago/crypto.js';
+import { refreshAccessToken } from '../lib/mercadopago/oauth.js';
+
+const router = Router();
+
+/** Renova contas cujo access_token vence nas próximas 48h. */
+const JANELA_RENOVACAO_MS = 48 * 60 * 60 * 1000;
+
+function autorizado(req: Request): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return false;
+
+  return header.substring(7) === secret;
+}
+
+/**
+ * POST /jobs/refresh-mp-tokens
+ *
+ * O refresh_token do Mercado Pago vale 6 meses; o access_token, bem menos.
+ * Sem este job, uma instituição que fica sem transacionar por um tempo teria o
+ * primeiro checkout do período falhando.
+ */
+router.post('/refresh-mp-tokens', async (req: Request, res: Response) => {
+  if (!autorizado(req)) {
+    return res.status(401).json({ error: 'Não autorizado' });
+  }
+
+  const limite = new Date(Date.now() + JANELA_RENOVACAO_MS);
+
+  try {
+    const contas = await prisma.mercadoPagoAccount.findMany({
+      where: { status: 'ACTIVE', expiresAt: { lt: limite } },
+    });
+
+    let renovadas = 0;
+    let falhas = 0;
+
+    for (const conta of contas) {
+      try {
+        const tokens = await refreshAccessToken(decryptToken(conta.refreshTokenEnc));
+
+        await prisma.mercadoPagoAccount.update({
+          where: { id: conta.id },
+          data: {
+            accessTokenEnc: encryptToken(tokens.accessToken),
+            refreshTokenEnc: encryptToken(tokens.refreshToken),
+            expiresAt: tokens.expiresAt,
+            refreshExpiresAt: tokens.refreshExpiresAt,
+            ultimoRefreshEm: new Date(),
+            ultimoErro: null,
+          },
+        });
+
+        renovadas++;
+      } catch (error: any) {
+        falhas++;
+
+        await prisma.mercadoPagoAccount.update({
+          where: { id: conta.id },
+          data: {
+            status: 'EXPIRED',
+            ultimoErro: String(error?.message ?? error).slice(0, 500),
+          },
+        });
+
+        console.error(
+          `Falha ao renovar token da instituição ${conta.instituicaoId}:`,
+          error?.message ?? error,
+        );
+      }
+    }
+
+    // Aproveita para limpar nonces vencidos.
+    const nonces = await prisma.oAuthNonce.deleteMany({
+      where: { expiraEm: { lt: new Date() } },
+    });
+
+    return res.status(200).json({
+      avaliadas: contas.length,
+      renovadas,
+      falhas,
+      noncesRemovidos: nonces.count,
+    });
+  } catch (error) {
+    console.error('Erro no job de refresh de tokens:', error);
+    return res.status(500).json({ error: 'Erro ao renovar tokens' });
+  }
+});
+
+export default router;

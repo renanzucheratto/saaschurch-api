@@ -8,25 +8,45 @@ datasource db {
 }
 
 model Instituicao {
-  id                   String                 @id @default(uuid())
-  nome                 String
-  cnpj                 String?                @unique
-  endereco             String?
-  telefone             String?
-  email                String?
-  logoFileName         String?
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
-  updatedByEmail       String?
-  users                Users[]
-  eventos              Eventos[]
-  areas                Area[]
-  participantes        Participantes[]
-  produtosEvento       ProdutosEvento[]
-  participanteProdutos ParticipanteProdutos[]
-  parcelas             Parcela[]
-  projetos             Projeto[]
+  id                    String                 @id @default(uuid())
+  nome                  String
+  cnpj                  String?                @unique
+  endereco              String?
+  telefone              String?
+  email                 String?
+  logoFileName          String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  updatedByEmail        String?
+  planoId               String?
+  planoAtribuidoEm      DateTime?
+  planoAtribuidoPor     String?
+  parceiroPiloto        Boolean                @default(false)
+  // Overrides de split. null = herda o valor do plano.
+  splitPercentual       Decimal?
+  splitMinimo           Decimal?
+  splitMaximo           Decimal?
+  splitObservacao       String?
+  users                 Users[]
+  eventos               Eventos[]
+  areas                 Area[]
+  participantes         Participantes[]
+  produtosEvento        ProdutosEvento[]
+  participanteProdutos  ParticipanteProdutos[]
+  parcelas              Parcela[]
+  projetos              Projeto[]
+  plano                 Plano?                 @relation(fields: [planoId], references: [id])
+  mercadoPagoAccount    MercadoPagoAccount?
+  assinaturas           Assinatura[]
+  pagamentos            Pagamento[]
+  mpPagamentos          MpPagamento[]
+  contasBancarias       ContaBancaria[]
+  categoriasFinanceiras CategoriaFinanceira[]
+  fornecedores          Fornecedor[]
+  transacoesBancarias   TransacaoBancaria[]
+  regrasConciliacao     RegraConciliacao[]
 
+  @@index([planoId])
   @@map("instituicoes")
 }
 
@@ -65,6 +85,9 @@ model Area {
   updatedByEmail String?
   instituicao    Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   users          UserArea[]
+
+  transacoesBancarias TransacaoBancaria[]
+  regrasConciliacao   RegraConciliacao[]
 
   @@index([instituicaoId])
   @@map("areas")
@@ -328,6 +351,9 @@ model Projeto {
   itens          ItemProjeto[]
   anexos         AnexoProjeto[]
 
+  transacoesBancarias TransacaoBancaria[]
+  regrasConciliacao   RegraConciliacao[]
+
   @@index([instituicaoId])
   @@index([liderUserId])
   @@index([statusId])
@@ -371,4 +397,367 @@ model AnexoProjeto {
 
   @@index([projetoId])
   @@map("anexos_projeto")
+}
+
+// ==================== PLANOS E MERCADO PAGO ====================
+// Estrutura isolada. Nao substitui nem alimenta Parcela/ParticipanteProdutos.
+
+enum MercadoPagoAccountStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum MpPagamentoStatus {
+  PENDING
+  IN_PROCESS
+  APPROVED
+  REJECTED
+  REFUNDED
+  CANCELLED
+  CHARGED_BACK
+}
+
+enum AssinaturaStatus {
+  PENDING
+  AUTHORIZED
+  PAUSED
+  CANCELLED
+}
+
+enum PagamentoStatus {
+  PENDING
+  IN_PROCESS
+  APPROVED
+  REJECTED
+  REFUNDED
+  CANCELLED
+}
+
+model Plano {
+  id                  String        @id @default(uuid())
+  codigo              String        @unique
+  nome                String
+  descricao           String?
+  cobrancaSaaS        Boolean       @default(true)
+  valorMensal         Decimal       @default(0)
+  valorAnual          Decimal?
+  mpPreapprovalPlanId String?
+  // Padroes de split herdados pelas instituicoes.
+  // Nomes feeEvento* preservados: as colunas ja existem no banco com dados.
+  feeEventoPercentual Decimal       @default(0)
+  feeEventoMinimo     Decimal       @default(0)
+  feeEventoMaximo     Decimal?
+  limiteEventosAtivos Int?
+  limiteUsuarios      Int?
+  features            Json          @default("{}")
+  ativo               Boolean       @default(true)
+  ordem               Int           @default(0)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  instituicoes        Instituicao[]
+  assinaturas         Assinatura[]
+
+  @@index([codigo])
+  @@map("planos")
+}
+
+// Tabelas abaixo (assinaturas, pagamentos, webhook_logs) ja existem no banco,
+// criadas pela migration 20260709000000_add_planos_e_pagamentos, e estao vazias.
+// Sao modeladas aqui apenas para o schema refletir o banco e o migrate diff
+// permanecer aditivo. NAO sao usadas pela integracao atual.
+model Assinatura {
+  id                 String           @id @default(uuid())
+  instituicaoId      String
+  planoId            String
+  mpPreapprovalId    String           @unique
+  valor              Decimal
+  periodicidade      String           @default("mensal")
+  status             AssinaturaStatus @default(PENDING)
+  proximaCobranca    DateTime?
+  canceladaEm        DateTime?
+  motivoCancelamento String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  instituicao        Instituicao      @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  plano              Plano            @relation(fields: [planoId], references: [id])
+
+  @@index([instituicaoId])
+  @@index([planoId])
+  @@index([status])
+  @@map("assinaturas")
+}
+
+model Pagamento {
+  id                    String          @id @default(uuid())
+  instituicaoId         String
+  participanteId        String
+  participanteProdutoId String?
+  parcelaId             String?         @unique
+  mpPaymentId           String          @unique
+  idempotencyKey        String          @unique
+  status                PagamentoStatus @default(PENDING)
+  statusDetail          String?
+  valor                 Decimal
+  applicationFee        Decimal
+  feePercentualAplicado Decimal
+  metodoPagamento       String?
+  parcelasCartao        Int             @default(1)
+  aprovadoEm            DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  instituicao           Instituicao     @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+
+  @@index([instituicaoId])
+  @@index([participanteId])
+  @@index([participanteProdutoId])
+  @@index([status])
+  @@index([status, createdAt])
+  @@map("pagamentos")
+}
+
+model WebhookLog {
+  id           String    @id @default(uuid())
+  mpEventId    String
+  tipo         String
+  action       String?
+  payload      Json
+  processado   Boolean   @default(false)
+  erro         String?
+  tentativas   Int       @default(0)
+  processadoEm DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([mpEventId, tipo, action])
+  @@index([processado])
+  @@map("webhook_logs")
+}
+
+model MercadoPagoAccount {
+  id               String                   @id @default(uuid())
+  instituicaoId    String                   @unique
+  mpUserId         String // collector_id do vendedor
+  accessTokenEnc   String // AES-256-GCM
+  refreshTokenEnc  String
+  publicKey        String
+  scope            String?
+  expiresAt        DateTime
+  refreshExpiresAt DateTime?
+  status           MercadoPagoAccountStatus @default(PENDING)
+  ultimoRefreshEm  DateTime?
+  ultimoErro       String?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  instituicao      Instituicao              @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+
+  @@index([instituicaoId])
+  @@index([status])
+  @@map("mercado_pago_accounts")
+}
+
+// State anti-CSRF do fluxo OAuth + verifier do PKCE
+model OAuthNonce {
+  nonce         String    @id
+  instituicaoId String
+  // default("") apenas para permitir ADD COLUMN em tabela ja populada.
+  // Todo nonce criado pelo fluxo atual grava um verifier real; um nonce com
+  // verifier vazio e residual e sera rejeitado no callback.
+  codeVerifier  String    @default("")
+  consumidoEm   DateTime?
+  expiraEm      DateTime
+  createdAt     DateTime  @default(now())
+
+  @@index([expiraEm])
+  @@map("oauth_nonces")
+}
+
+// participanteId / participanteProdutoId sao referencias FRACAS (sem @relation)
+// para nao adicionar campos de volta nos models de inscricao.
+model MpPagamento {
+  id                      String            @id @default(uuid())
+  instituicaoId           String
+  participanteId          String
+  participanteProdutoId   String?
+  eventoId                String?
+  mpPreferenceId          String?           @unique
+  mpPaymentId             String?           @unique
+  externalReference       String            @unique
+  status                  MpPagamentoStatus @default(PENDING)
+  statusDetail            String?
+  valor                   Decimal
+  splitValor              Decimal
+  splitPercentualAplicado Decimal
+  metodoPagamento         String?
+  parcelasCartao          Int               @default(1)
+  initPoint               String?
+  expiraEm                DateTime?
+  aprovadoEm              DateTime?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  instituicao             Instituicao       @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+
+  @@index([instituicaoId])
+  @@index([participanteId])
+  @@index([participanteProdutoId])
+  @@index([eventoId])
+  @@index([status])
+  @@index([status, createdAt])
+  @@map("mp_pagamentos")
+}
+
+model MpWebhookLog {
+  id           String    @id @default(uuid())
+  mpEventId    String
+  tipo         String
+  // NAO usar String? aqui: no Postgres NULLs sao distintos entre si em indice
+  // unique, o que faria a dedup de reentrega falhar sempre que action viesse
+  // ausente. String vazia dedupa corretamente.
+  action       String    @default("")
+  payload      Json
+  processado   Boolean   @default(false)
+  erro         String?
+  tentativas   Int       @default(0)
+  processadoEm DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([mpEventId, tipo, action])
+  @@index([processado])
+  @@map("mp_webhook_logs")
+}
+
+// ==================== CONCILIACAO BANCARIA ====================
+// Tabelas ja existentes no banco (migration 20260718000000_conciliacao_bancaria),
+// com dados. Modeladas aqui para o schema refletir o banco. Fora do escopo da
+// integracao Mercado Pago.
+
+model ContaBancaria {
+  id               String              @id @default(uuid())
+  instituicaoId    String
+  banco            String // "237" = Bradesco
+  agencia          String
+  conta            String
+  digito           String?
+  descricao        String?
+  saldoInicial     Decimal             @default(0)
+  dataSaldoInicial DateTime?
+  ativo            Boolean             @default(true)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  updatedByEmail   String?
+  instituicao      Instituicao         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  transacoes       TransacaoBancaria[]
+
+  @@index([instituicaoId])
+  @@map("contas_bancarias")
+}
+
+model CategoriaFinanceira {
+  id             String              @id @default(uuid())
+  nome           String
+  tipo           String // RECEITA | DESPESA
+  instituicaoId  String
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  updatedByEmail String?
+  instituicao    Instituicao         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  transacoes     TransacaoBancaria[]
+  regras         RegraConciliacao[]
+
+  @@unique([instituicaoId, nome, tipo])
+  @@index([instituicaoId])
+  @@map("categorias_financeiras")
+}
+
+model Fornecedor {
+  id             String              @id @default(uuid())
+  nome           String
+  cnpjCpf        String?
+  telefone       String?
+  email          String?
+  observacao     String?
+  instituicaoId  String
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  updatedByEmail String?
+  instituicao    Instituicao         @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  transacoes     TransacaoBancaria[]
+  regras         RegraConciliacao[]
+
+  @@unique([instituicaoId, nome])
+  @@index([instituicaoId])
+  @@map("fornecedores")
+}
+
+model TransacaoBancaria {
+  id              String   @id @default(uuid())
+  contaBancariaId String
+  instituicaoId   String
+  dataMovimento   DateTime
+  valor           Decimal
+  tipo            String // CREDITO | DEBITO
+  codigoBanco     String
+  descricaoBanco  String
+  descricaoAbrev  String?
+  historico       String?
+  documento       String?
+  saldoApos       Decimal?
+  hashDedup       String   @unique
+  categoriaId     String?
+  fornecedorId    String?
+  projetoId       String?
+  areaId          String?
+  conciliada      Boolean  @default(false)
+  regraAplicadaId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  updatedByEmail  String?
+
+  contaBancaria ContaBancaria        @relation(fields: [contaBancariaId], references: [id], onDelete: Cascade)
+  instituicao   Instituicao          @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  categoria     CategoriaFinanceira? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  fornecedor    Fornecedor?          @relation(fields: [fornecedorId], references: [id], onDelete: SetNull)
+  projeto       Projeto?             @relation(fields: [projetoId], references: [id], onDelete: SetNull)
+  area          Area?                @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  @@index([contaBancariaId])
+  @@index([instituicaoId])
+  @@index([dataMovimento])
+  @@index([categoriaId])
+  @@index([fornecedorId])
+  @@index([projetoId])
+  @@index([areaId])
+  @@map("transacoes_bancarias")
+}
+
+model RegraConciliacao {
+  id             String   @id @default(uuid())
+  instituicaoId  String
+  nome           String?
+  campo          String
+  operador       String
+  valor          String
+  tipoTransacao  String?
+  categoriaId    String?
+  fornecedorId   String?
+  projetoId      String?
+  areaId         String?
+  prioridade     Int      @default(0)
+  ativo          Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  updatedByEmail String?
+
+  instituicao Instituicao          @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  categoria   CategoriaFinanceira? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+  fornecedor  Fornecedor?          @relation(fields: [fornecedorId], references: [id], onDelete: SetNull)
+  projeto     Projeto?             @relation(fields: [projetoId], references: [id], onDelete: SetNull)
+  area        Area?                @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  @@index([instituicaoId])
+  @@index([categoriaId])
+  @@index([fornecedorId])
+  @@index([projetoId])
+  @@index([areaId])
+  @@map("regras_conciliacao")
 }
