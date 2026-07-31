@@ -11,6 +11,12 @@ import {
   getAccessTokenInstituicao,
   ContaMercadoPagoIndisponivel,
 } from '../lib/mercadopago/token.js';
+import {
+  impressaoToken,
+  logMp,
+  logMpErro,
+  mascarar,
+} from '../lib/mercadopago/log.js';
 import { resolveRegraSplit, calcularSplit } from '../helpers/split.helper.js';
 
 const router = Router();
@@ -104,6 +110,20 @@ router.post('/preferences', async (req: Request, res: Response) => {
     });
 
     if (pendente) {
+      // Reuso: um init_point criado com configuração ruim continua sendo
+      // devolvido por até 1h. Se o erro persiste "sem motivo", é aqui.
+      logMp('preference.ok', {
+        instituicaoId,
+        reaproveitada: true,
+        mpPagamentoId: pendente.id,
+        preferenceId: pendente.mpPreferenceId,
+        externalReference: pendente.externalReference,
+        criadaEm: pendente.createdAt.toISOString(),
+        expiraEm: pendente.expiraEm?.toISOString() ?? null,
+        splitValor: Number(pendente.splitValor),
+        valor: Number(pendente.valor),
+      });
+
       return res.status(200).json({
         init_point: pendente.initPoint,
         mpPagamentoId: pendente.id,
@@ -120,12 +140,35 @@ router.post('/preferences', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Instituição não encontrada' });
     }
 
+    // Conta MP gravada: serve de gabarito para conferir, depois, se a
+    // preference nasceu debaixo do collector certo.
+    const contaMp = await prisma.mercadoPagoAccount.findUnique({
+      where: { instituicaoId },
+      select: { mpUserId: true, status: true, scope: true, expiresAt: true },
+    });
+
+    logMp('preference.inicio', {
+      instituicaoId,
+      instituicao: instituicao.nome,
+      participanteId,
+      produtoId,
+      participanteProdutoId: participanteProduto.id,
+      mpUserIdGravado: contaMp?.mpUserId ?? null,
+      contaStatus: contaMp?.status ?? null,
+      contaScope: contaMp?.scope ?? null,
+    });
+
     let accessToken: string;
 
     try {
       accessToken = await getAccessTokenInstituicao(instituicaoId);
     } catch (error) {
       if (error instanceof ContaMercadoPagoIndisponivel) {
+        logMpErro('preference.erro', {
+          instituicaoId,
+          etapa: 'obter_token',
+          motivo: error.motivo,
+        });
         return res.status(409).json({ error: error.message, motivo: error.motivo });
       }
       throw error;
@@ -141,6 +184,28 @@ router.post('/preferences', async (req: Request, res: Response) => {
 
     const regra = resolveRegraSplit(instituicao, instituicao.plano);
     const splitValor = calcularSplit(valor, regra);
+
+    logMp('preference.split', {
+      instituicaoId,
+      valorProduto: valor,
+      regra,
+      splitValor,
+      liquidoInstituicao: Math.round((valor - splitValor) * 100) / 100,
+    });
+
+    // O Mercado Pago recusa processar quando a comissão come o valor inteiro:
+    // o vendedor receberia zero. A preference é CRIADA normalmente e só quebra
+    // no pagamento, com erro genérico — por isso o alerta tem de sair aqui.
+    if (splitValor >= valor) {
+      logMpErro('preference.alerta', {
+        instituicaoId,
+        alerta: 'marketplace_fee_maior_ou_igual_ao_valor',
+        valorProduto: valor,
+        splitValor,
+        detalhe:
+          'marketplace_fee >= transaction_amount: o MP tende a falhar no processamento do pagamento',
+      });
+    }
 
     const externalReference = crypto.randomUUID();
     const expiraEm = new Date(Date.now() + VALIDADE_PREFERENCE_MS);
@@ -214,6 +279,35 @@ router.post('/preferences', async (req: Request, res: Response) => {
       preferencePayload.marketplace_fee = splitValor;
     }
 
+    logMp('preference.payload', {
+      instituicaoId,
+      mpPagamentoId: pagamento.id,
+      externalReference,
+      // Qual credencial vai assinar esta preference. Comparar com o
+      // `token.resolve` de cima e com o `oauth.exchange` da conexão.
+      token: impressaoToken(accessToken),
+      tokenPlataforma: impressaoToken(process.env.MERCADO_PAGO_ACCESS_TOKEN),
+      mpUserIdEsperado: contaMp?.mpUserId ?? null,
+      valorItem: valor,
+      marketplaceFee: splitValor > 0 ? splitValor : null,
+      binaryMode: preferencePayload.binary_mode,
+      autoReturn: preferencePayload.auto_return ?? null,
+      notificationUrl: preferencePayload.notification_url,
+      backUrls: preferencePayload.back_urls,
+      // https é pré-requisito do auto_return e do webhook; localhost aqui
+      // explica metade dos erros do checkout.
+      frontendHttps: frontendUrl.startsWith('https://'),
+      apiHttps: apiUrl.startsWith('https://'),
+      statementDescriptor: preferencePayload.statement_descriptor,
+      expiraEm: expiraEm.toISOString(),
+      payer: {
+        email: mascarar(participante.email),
+        temCpf: Boolean(cpfLimpo),
+        cpfDigitos: cpfLimpo.length,
+        temTelefone: Boolean(participante.telefone),
+      },
+    });
+
     let preference;
 
     try {
@@ -224,7 +318,16 @@ router.post('/preferences', async (req: Request, res: Response) => {
           body: preferencePayload,
         }),
       );
-    } catch (error) {
+    } catch (error: any) {
+      logMpErro('preference.erro', {
+        instituicaoId,
+        mpPagamentoId: pagamento.id,
+        externalReference,
+        etapa: 'criar_preference',
+        mensagem: String(error?.message ?? error),
+        corpo: error?.corpo ?? null,
+      });
+
       // A preference falhou: o registro local não pode ficar como pendente
       // válido, senão bloqueia a próxima tentativa pelo caminho de reuso.
       await prisma.mpPagamento.update({
@@ -232,6 +335,45 @@ router.post('/preferences', async (req: Request, res: Response) => {
         data: { status: 'CANCELLED', statusDetail: 'falha_ao_criar_preference' },
       });
       throw error;
+    }
+
+    const collectorId =
+      (preference as { collector_id?: unknown }).collector_id !== undefined
+        ? String((preference as { collector_id?: unknown }).collector_id)
+        : null;
+
+    logMp('preference.ok', {
+      instituicaoId,
+      mpPagamentoId: pagamento.id,
+      preferenceId: preference.id ?? null,
+      externalReference,
+      // A prova final de que a preference saiu na conta da igreja: o
+      // collector_id devolvido pelo MP é o dono do access_token usado.
+      collectorId,
+      mpUserIdGravado: contaMp?.mpUserId ?? null,
+      collectorConfere: Boolean(
+        collectorId && contaMp?.mpUserId && collectorId === contaMp.mpUserId,
+      ),
+      clientId: (preference as { client_id?: unknown }).client_id ?? null,
+      appIdConfigurado: process.env.MERCADO_PAGO_APP_ID ?? null,
+      marketplaceFeeAceito:
+        (preference as { marketplace_fee?: unknown }).marketplace_fee ?? null,
+      temInitPoint: Boolean(preference.init_point),
+      // sandbox_init_point só existe/funciona com credencial de TESTE. Com
+      // token APP_USR de test user o pagamento roda em modo produtivo.
+      temSandboxInitPoint: Boolean(
+        (preference as { sandbox_init_point?: unknown }).sandbox_init_point,
+      ),
+    });
+
+    if (collectorId && contaMp?.mpUserId && collectorId !== contaMp.mpUserId) {
+      logMpErro('preference.alerta', {
+        instituicaoId,
+        alerta: 'collector_divergente',
+        collectorId,
+        mpUserIdGravado: contaMp.mpUserId,
+        detalhe: 'a preference nasceu em uma conta MP diferente da conectada',
+      });
     }
 
     if (!preference.init_point) {

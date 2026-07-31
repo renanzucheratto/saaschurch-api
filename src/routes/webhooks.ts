@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma/client.js';
 import { validateWebhookSignature } from '../lib/mercadopago/signature.js';
 import { chamarMp, clientePagamento } from '../lib/mercadopago/client.js';
 import { getAccessTokenInstituicao } from '../lib/mercadopago/token.js';
+import { logMp, logMpErro } from '../lib/mercadopago/log.js';
 import type { MpPagamentoStatus } from '@prisma/client';
 
 const router = Router();
@@ -55,6 +56,16 @@ router.post('/mercadopago', async (req: Request, res: Response) => {
     xSignature: req.headers['x-signature'] as string | undefined,
     xRequestId: req.headers['x-request-id'] as string | undefined,
     dataId,
+  });
+
+  logMp('webhook.recebido', {
+    dataId,
+    ref: req.query.ref ? String(req.query.ref) : null,
+    tipo: String(corpo.type || corpo.topic || req.query.type || 'desconhecido'),
+    action: String(corpo.action || ''),
+    liveMode: corpo.live_mode ?? null,
+    assinaturaValida: validacao.valido,
+    motivoAssinatura: validacao.valido ? null : validacao.motivo,
   });
 
   if (!validacao.valido) {
@@ -124,6 +135,15 @@ router.post('/mercadopago', async (req: Request, res: Response) => {
       ? await prisma.mpPagamento.findUnique({ where: { externalReference: ref } })
       : await prisma.mpPagamento.findFirst({ where: { mpPaymentId: dataId } });
 
+    logMp('webhook.vinculo', {
+      dataId,
+      ref: ref ?? null,
+      encontrado: Boolean(pagamento),
+      mpPagamentoId: pagamento?.id ?? null,
+      instituicaoId: pagamento?.instituicaoId ?? null,
+      statusLocal: pagamento?.status ?? null,
+    });
+
     if (!pagamento) {
       // Pode ser pagamento de outra origem na mesma conta. Não é erro nosso.
       await prisma.mpWebhookLog.update({
@@ -143,6 +163,25 @@ router.post('/mercadopago', async (req: Request, res: Response) => {
     const pagamentoMp = await chamarMp(`GET /v1/payments/${dataId}`, () =>
       clientePagamento(accessToken).get({ id: dataId }),
     );
+
+    // Retrato do payment na fonte: é aqui que aparece por que o MP recusou
+    // (status_detail) e quanto de fato foi para cada lado do split.
+    logMp('webhook.payment', {
+      mpPaymentId: pagamentoMp.id ?? null,
+      status: pagamentoMp.status ?? null,
+      statusDetail: pagamentoMp.status_detail ?? null,
+      metodo: pagamentoMp.payment_method_id ?? null,
+      tipoMetodo: pagamentoMp.payment_type_id ?? null,
+      valor: pagamentoMp.transaction_amount ?? null,
+      taxaMarketplace:
+        (pagamentoMp as { application_fee?: unknown }).application_fee ?? null,
+      liquidoRecebedor:
+        pagamentoMp.transaction_details?.net_received_amount ?? null,
+      parcelas: pagamentoMp.installments ?? null,
+      liveMode: pagamentoMp.live_mode ?? null,
+      collectorId: (pagamentoMp as { collector_id?: unknown }).collector_id ?? null,
+      externalReference: pagamentoMp.external_reference ?? null,
+    });
 
     // O ref vem de uma URL que nós montamos, mas quem chama o webhook é externo.
     // Conferir que o payment realmente aponta para este registro evita que uma
@@ -215,9 +254,23 @@ router.post('/mercadopago', async (req: Request, res: Response) => {
       data: { processado: true, processadoEm: new Date(), erro: null },
     });
 
+    logMp('webhook.aplicado', {
+      mpPagamentoId: pagamento.id,
+      instituicaoId: pagamento.instituicaoId,
+      de: pagamento.status,
+      para: novoStatus,
+      statusDetail: pagamentoMp.status_detail ?? null,
+    });
+
     return res.status(200).json({ recebido: true, status: novoStatus });
   } catch (error: any) {
     const mensagem = String(error?.message ?? error).slice(0, 500);
+    logMpErro('webhook.recebido', {
+      dataId,
+      etapa: 'processamento',
+      mensagem,
+      corpo: error?.corpo ?? null,
+    });
     console.error('Erro ao processar webhook Mercado Pago:', mensagem);
 
     await prisma.mpWebhookLog

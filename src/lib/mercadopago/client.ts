@@ -19,6 +19,7 @@ import {
   Preference,
   User,
 } from 'mercadopago';
+import { logMp, logMpErro } from './log.js';
 
 /** A função tem 10s de teto na Vercel, então o default é curto. */
 const TIMEOUT_PADRAO_MS = 8000;
@@ -145,9 +146,25 @@ export function clienteOAuthPlataforma(opcoes?: OpcoesMp): OAuth {
 
 /** Envolve chamadas ao SDK para o erro sair sempre como MercadoPagoError. */
 export async function chamarMp<T>(contexto: string, fn: () => Promise<T>): Promise<T> {
+  const inicio = Date.now();
+
   try {
-    return await fn();
+    const resultado = await fn();
+    logMp('mp.chamada', { contexto, ms: Date.now() - inicio, ok: true });
+    return resultado;
   } catch (erro) {
-    throw MercadoPagoError.de(erro, contexto);
+    const normalizado = MercadoPagoError.de(erro, contexto);
+
+    // O corpo cru do MP é onde mora o motivo real (cause[].code/description).
+    // Sem ele, sobra só "Bad Request" e o debug morre aqui.
+    logMpErro('mp.erro', {
+      contexto,
+      ms: Date.now() - inicio,
+      status: normalizado.status,
+      mensagem: normalizado.message,
+      corpo: normalizado.corpo,
+    });
+
+    throw normalizado;
   }
 }

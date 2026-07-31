@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { chamarMp, clienteOAuthPlataforma } from './client.js';
+import { impressaoToken, logMp } from './log.js';
 
 /**
  * Fluxo OAuth Authorization Code + PKCE para vincular a conta Mercado Pago de
@@ -110,7 +111,22 @@ export async function exchangeCode(
     clienteOAuthPlataforma().create({ body: corpo }),
   );
 
-  return normalizarResposta(resposta as Record<string, any>);
+  const tokens = normalizarResposta(resposta as Record<string, any>);
+
+  logMp('oauth.exchange', {
+    appId: process.env.MERCADO_PAGO_APP_ID,
+    redirectUri: process.env.MERCADO_PAGO_REDIRECT_URI,
+    mpUserId: tokens.mpUserId,
+    scope: tokens.scope,
+    temPublicKey: Boolean(tokens.publicKey),
+    // A credencial da plataforma e a da instituição têm de ser do MESMO
+    // ambiente: plataforma TEST + instituição APP_USR não fecha pagamento.
+    tokenPlataforma: impressaoToken(process.env.MERCADO_PAGO_ACCESS_TOKEN),
+    tokenInstituicao: impressaoToken(tokens.accessToken),
+    expiraEm: tokens.expiresAt.toISOString(),
+  });
+
+  return tokens;
 }
 
 export async function refreshAccessToken(
@@ -127,5 +143,15 @@ export async function refreshAccessToken(
     clienteOAuthPlataforma().refresh({ body: corpo }),
   );
 
-  return normalizarResposta(resposta as Record<string, any>);
+  const tokens = normalizarResposta(resposta as Record<string, any>);
+
+  logMp('oauth.refresh', {
+    appId: process.env.MERCADO_PAGO_APP_ID,
+    mpUserId: tokens.mpUserId,
+    scope: tokens.scope,
+    tokenInstituicao: impressaoToken(tokens.accessToken),
+    expiraEm: tokens.expiresAt.toISOString(),
+  });
+
+  return tokens;
 }

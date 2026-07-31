@@ -1,6 +1,7 @@
 import { prisma } from '../prisma/client.js';
 import { decryptToken, encryptToken } from './crypto.js';
 import { refreshAccessToken } from './oauth.js';
+import { impressaoToken, logMp, logMpErro } from './log.js';
 
 /**
  * Resolve o access_token válido de uma instituição, renovando de forma
@@ -28,6 +29,7 @@ export async function getAccessTokenInstituicao(instituicaoId: string): Promise<
   });
 
   if (!conta || !conta.accessTokenEnc) {
+    logMpErro('token.falha', { instituicaoId, motivo: 'nao_conectada' });
     throw new ContaMercadoPagoIndisponivel(
       'nao_conectada',
       'Instituição não conectada ao Mercado Pago',
@@ -35,6 +37,7 @@ export async function getAccessTokenInstituicao(instituicaoId: string): Promise<
   }
 
   if (conta.status === 'REVOKED') {
+    logMpErro('token.falha', { instituicaoId, motivo: 'revogada' });
     throw new ContaMercadoPagoIndisponivel(
       'revogada',
       'Conexão com o Mercado Pago foi revogada',
@@ -45,7 +48,20 @@ export async function getAccessTokenInstituicao(instituicaoId: string): Promise<
     conta.expiresAt.getTime() - Date.now() < MARGEM_RENOVACAO_MS;
 
   if (!precisaRenovar) {
-    return decryptToken(conta.accessTokenEnc);
+    const accessToken = decryptToken(conta.accessTokenEnc);
+
+    logMp('token.resolve', {
+      instituicaoId,
+      mpUserId: conta.mpUserId,
+      status: conta.status,
+      scope: conta.scope,
+      renovou: false,
+      expiraEm: conta.expiresAt.toISOString(),
+      expiraEmMin: Math.round((conta.expiresAt.getTime() - Date.now()) / 60000),
+      token: impressaoToken(accessToken),
+    });
+
+    return accessToken;
   }
 
   try {
@@ -64,8 +80,29 @@ export async function getAccessTokenInstituicao(instituicaoId: string): Promise<
       },
     });
 
+    logMp('token.renovado', {
+      instituicaoId,
+      mpUserIdGravado: conta.mpUserId,
+      mpUserIdNovo: tokens.mpUserId,
+      // Divergência aqui = a conta MP do refresh não é a que conectamos.
+      contaDivergente: Boolean(
+        conta.mpUserId && tokens.mpUserId && conta.mpUserId !== tokens.mpUserId,
+      ),
+      scope: tokens.scope,
+      renovou: true,
+      expiraEm: tokens.expiresAt.toISOString(),
+      token: impressaoToken(tokens.accessToken),
+    });
+
     return tokens.accessToken;
   } catch (error: any) {
+    logMpErro('token.falha', {
+      instituicaoId,
+      mpUserId: conta.mpUserId,
+      motivo: 'refresh_falhou',
+      detalhe: String(error?.message ?? error).slice(0, 500),
+    });
+
     await prisma.mercadoPagoAccount.update({
       where: { instituicaoId },
       data: {
