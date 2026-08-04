@@ -329,6 +329,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     });
 
     if (error || !data?.properties?.action_link) {
+      console.error('Erro ao gerar link de recuperação:', email, error);
       return res.status(200).json(GENERIC_RESPONSE);
     }
 
@@ -344,7 +345,7 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
         firstName,
         institutionName: user.instituicao.nome,
         actionLink: data.properties.action_link,
-      }).catch((err) => console.error('Erro ao enviar email de recuperação:', err));
+      }).catch((err) => console.error('Erro ao enviar email de recuperação:', email, err));
     }
 
     return res.status(200).json(GENERIC_RESPONSE);
