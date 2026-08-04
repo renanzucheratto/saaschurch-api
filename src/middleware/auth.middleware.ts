@@ -50,6 +50,10 @@ export async function authenticateUser(
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
+    if (!dbUser.active) {
+      return res.status(401).json({ error: 'Usuário inativo' });
+    }
+
     req.user = {
       id: dbUser.id,
       email: dbUser.email,

@@ -80,7 +80,7 @@ router.get('/', authenticateUser, async (req: AuthRequest, res: Response) => {
   try {
     const { instituicaoId, userType } = req.query;
 
-    const where: any = {};
+    const where: any = { active: true };
 
     // Se não for backoffice, só pode ver a sua própria instituição
     if (req.user!.userType !== 'backoffice') {
@@ -221,11 +221,21 @@ router.delete('/:id', authenticateUser, requireBackoffice, async (req: AuthReque
       where: { id },
     });
 
-    if (!user) {
+    if (!user || !user.active) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    await supabaseAdmin.auth.admin.deleteUser(id);
+    if (id === req.user!.id) {
+      return res.status(400).json({ error: 'Você não pode excluir seu próprio usuário' });
+    }
+
+    await prisma.users.update({
+      where: { id },
+      data: {
+        active: false,
+        updatedByEmail: req.user?.email || null,
+      },
+    });
 
     return res.status(200).json({ message: 'Usuário excluído com sucesso' });
   } catch (error) {

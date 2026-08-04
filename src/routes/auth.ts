@@ -5,6 +5,7 @@ import { SignUpData, SignInData, UpdateUserData } from '../types/auth.types.js';
 import { authenticateUser, AuthRequest, USER_TYPES } from '../middleware/auth.middleware.js';
 import { enviarEmailRecuperacaoSenha } from '../helpers/email.js';
 import { getLogoUrl } from '../lib/supabase/storage.js';
+import { loginRateLimit, forgotPasswordRateLimit } from '../middleware/rateLimit.js';
 
 const router = Router();
 
@@ -98,7 +99,7 @@ router.post('/signup', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/signin', async (req: Request, res: Response) => {
+router.post('/signin', loginRateLimit, async (req: Request, res: Response) => {
   try {
     const { email, password }: SignInData = req.body;
 
@@ -122,7 +123,7 @@ router.post('/signin', async (req: Request, res: Response) => {
       },
     });
 
-    if (!user) {
+    if (!user || !user.active) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
@@ -313,7 +314,7 @@ router.post('/refresh', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/forgot-password', async (req: Request, res: Response) => {
+router.post('/forgot-password', forgotPasswordRateLimit, async (req: Request, res: Response) => {
   const GENERIC_RESPONSE = { message: 'Se este email estiver cadastrado, você receberá as instruções em breve.' };
   try {
     const { email } = req.body;
@@ -340,12 +341,16 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
 
     if (user) {
       const firstName = user.nome.split(' ')[0];
-      enviarEmailRecuperacaoSenha({
-        email,
-        firstName,
-        institutionName: user.instituicao.nome,
-        actionLink: data.properties.action_link,
-      }).catch((err) => console.error('Erro ao enviar email de recuperação:', email, err));
+      try {
+        await enviarEmailRecuperacaoSenha({
+          email,
+          firstName,
+          institutionName: user.instituicao.nome,
+          actionLink: data.properties.action_link,
+        });
+      } catch (err) {
+        console.error('Erro ao enviar email de recuperação:', email, err);
+      }
     }
 
     return res.status(200).json(GENERIC_RESPONSE);
