@@ -583,33 +583,44 @@ router.post('/:eventoId/participantes', async (req, res) => {
       });
     }
 
+    // Produtos ocultos não são ofertados na inscrição pública — a organização os
+    // atribui depois, editando o participante, para lançar as parcelas.
+    const produtosOfertados = (evento.produtos || []).filter((p: any) => !p.oculto);
+
     let produtosValidos: any[] = [];
-    if (evento.produtos && evento.produtos.length > 0) {
-      if (evento.selecao_unica_produto && (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId)) {
+    let produtosSelecionadosValidados: any[] = [];
+
+    if (produtosOfertados.length > 0) {
+      produtosSelecionadosValidados = Array.isArray(produtos_selecionados)
+        ? produtos_selecionados.filter((p: any) => p?.produtoId)
+        : [];
+
+      if (evento.selecao_unica_produto && produtosSelecionadosValidados.length === 0) {
         return res.status(400).json({
           error: 'Este evento possui produtos, selecione ao menos um.'
         });
       }
 
-      // Validar se todos os produtos selecionados existem no evento
-      const produtosIds = produtos_selecionados.map((p: any) => p.produtoId).filter(Boolean);
-      produtosValidos = await db.produtosEvento.findMany({
-        where: {
-          id: { in: produtosIds },
-          eventoId: eventoId
-        }
-      });
-
-      if (produtosValidos.length !== produtos_selecionados.length) {
+      // Validar seleção única de produto se necessário
+      if (evento.selecao_unica_produto && produtosSelecionadosValidados.length > 1) {
         return res.status(400).json({
-          error: 'Um ou mais produtos selecionados não pertencem a este evento'
+          error: 'Este evento permite apenas a seleção de um produto'
         });
       }
 
-      // Validar seleção única de produto se necessário
-      if (evento.selecao_unica_produto && produtos_selecionados.length > 1) {
+      // Validar se todos os produtos selecionados existem no evento e não estão ocultos
+      const produtosIds = produtosSelecionadosValidados.map((p: any) => p.produtoId);
+      produtosValidos = await db.produtosEvento.findMany({
+        where: {
+          id: { in: produtosIds },
+          eventoId: eventoId,
+          oculto: false
+        }
+      });
+
+      if (produtosValidos.length !== produtosSelecionadosValidados.length) {
         return res.status(400).json({
-          error: 'Este evento permite apenas a seleção de um produto'
+          error: 'Um ou mais produtos selecionados não pertencem a este evento'
         });
       }
     }
@@ -643,8 +654,8 @@ router.post('/:eventoId/participantes', async (req, res) => {
           rg: temCamposCustomizados ? null : rg,
           cpf: temCamposCustomizados ? null : cpf.replace(/\D/g, ''),
           termo_assinado: temCamposCustomizados ? null : termo_assinado,
-          produtos: (!produtos_selecionados || produtos_selecionados.length === 0 || !produtos_selecionados[0].produtoId) ? undefined : {
-            create: produtos_selecionados.map((produto: any) => {
+          produtos: produtosSelecionadosValidados.length === 0 ? undefined : {
+            create: produtosSelecionadosValidados.map((produto: any) => {
               const prodValido = produtosValidos.find((p: any) => p.id === produto.produtoId);
               return {
                 produtoId: produto.produtoId,
