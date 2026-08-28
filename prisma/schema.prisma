@@ -45,30 +45,32 @@ model Instituicao {
   fornecedores          Fornecedor[]
   transacoesBancarias   TransacaoBancaria[]
   regrasConciliacao     RegraConciliacao[]
+  ocorrenciasCalendario OcorrenciaCalendario[]
 
   @@index([planoId])
   @@map("instituicoes")
 }
 
 model Users {
-  id             String      @id @default(uuid())
-  email          String      @unique
-  nome           String
-  telefone       String?
-  rg             String?
-  cpf            String?     @unique
-  userType       String      @default("membro") // membro | backoffice | lider | pastor | tesouraria
-  instituicaoId  String
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  updatedByEmail String?
-  active         Boolean     @default(true)
-  pix_key        String?
-  instituicao    Instituicao @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  eventos        Eventos[]
-  areas          UserArea[]
-  userRoles      UserRole[]
-  projetos       Projeto[]   @relation("ProjetoLider")
+  id                    String                 @id @default(uuid())
+  email                 String                 @unique
+  nome                  String
+  telefone              String?
+  rg                    String?
+  cpf                   String?                @unique
+  userType              String                 @default("membro") // membro | backoffice | lider | pastor | tesouraria
+  instituicaoId         String
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  updatedByEmail        String?
+  active                Boolean                @default(true)
+  pix_key               String?
+  instituicao           Instituicao            @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  eventos               Eventos[]
+  areas                 UserArea[]
+  userRoles             UserRole[]
+  projetos              Projeto[]              @relation("ProjetoLider")
+  ocorrenciasCalendario OcorrenciaCalendario[]
 
   @@index([instituicaoId])
   @@index([email])
@@ -79,6 +81,7 @@ model Users {
 model Area {
   id             String      @id @default(uuid())
   nome           String
+  cor            String?
   instituicaoId  String
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
@@ -88,6 +91,7 @@ model Area {
 
   transacoesBancarias TransacaoBancaria[]
   regrasConciliacao   RegraConciliacao[]
+  ocorrencias         OcorrenciaArea[]
 
   @@index([instituicaoId])
   @@map("areas")
@@ -106,6 +110,65 @@ model UserArea {
   @@index([userId])
   @@index([areaId])
   @@map("user_areas")
+}
+
+// ==================== CALENDARIO ====================
+// Ocorrencias sao entidades proprias do Calendario, distintas de Eventos.
+// Eventos continua sem recorrencia/area e aparece no calendario apenas
+// via leitura no frontend (nao ha relacao no banco entre Eventos e Area).
+
+model OcorrenciaCalendario {
+  id                String   @id @default(uuid())
+  titulo            String
+  nota              String?
+  dataInicio        DateTime
+  dataFim           DateTime
+  horaInicioDefault String
+  horaFimDefault    String
+  instituicaoId     String
+  userId            String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  updatedByEmail    String?
+
+  instituicao Instituicao                @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  user        Users?                     @relation(fields: [userId], references: [id])
+  areas       OcorrenciaArea[]
+  excecoes    OcorrenciaHorarioExcecao[]
+
+  @@index([instituicaoId])
+  @@index([dataInicio, dataFim])
+  @@map("ocorrencias_calendario")
+}
+
+model OcorrenciaArea {
+  id           String   @id @default(uuid())
+  ocorrenciaId String
+  areaId       String
+  createdAt    DateTime @default(now())
+
+  ocorrencia OcorrenciaCalendario @relation(fields: [ocorrenciaId], references: [id], onDelete: Cascade)
+  area       Area                 @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  @@unique([ocorrenciaId, areaId])
+  @@index([areaId])
+  @@map("ocorrencias_areas")
+}
+
+model OcorrenciaHorarioExcecao {
+  id           String   @id @default(uuid())
+  ocorrenciaId String
+  data         DateTime
+  horaInicio   String
+  horaFim      String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ocorrencia OcorrenciaCalendario @relation(fields: [ocorrenciaId], references: [id], onDelete: Cascade)
+
+  @@unique([ocorrenciaId, data])
+  @@index([ocorrenciaId])
+  @@map("ocorrencias_horario_excecoes")
 }
 
 model Eventos {

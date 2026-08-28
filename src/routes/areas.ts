@@ -4,6 +4,7 @@ import { authenticateUser, AuthRequest } from '../middleware/auth.middleware.js'
 
 const router = Router();
 const db = prisma as any;
+const REGEX_COR_HEX = /^#[0-9A-Fa-f]{6}$/;
 
 router.use(authenticateUser);
 
@@ -17,6 +18,7 @@ function formatArea(area: any) {
   return {
     id: area.id,
     nome: area.nome,
+    cor: area.cor,
     createdAt: area.createdAt,
     updatedAt: area.updatedAt,
     lideres,
@@ -74,9 +76,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Apenas líderes e backoffice podem criar áreas.' });
     }
 
-    const { nome } = req.body;
+    const { nome, cor } = req.body;
     if (!nome?.trim()) {
       return res.status(400).json({ error: 'O nome da área é obrigatório.' });
+    }
+    if (cor && !REGEX_COR_HEX.test(cor)) {
+      return res.status(400).json({ error: 'A cor deve estar no formato hexadecimal (#RRGGBB).' });
     }
 
     const existing = await db.area.findFirst({
@@ -89,6 +94,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     const area = await db.area.create({
       data: {
         nome: nome.trim(),
+        cor: cor ?? null,
         instituicaoId: req.user!.instituicaoId,
         updatedByEmail: req.user!.email,
         // Criador vira lider automaticamente (exceto backoffice)
@@ -151,14 +157,17 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Você não tem permissão para editar esta área.' });
     }
 
-    const { nome } = req.body;
+    const { nome, cor } = req.body;
     if (!nome?.trim()) {
       return res.status(400).json({ error: 'O nome da área é obrigatório.' });
+    }
+    if (cor && !REGEX_COR_HEX.test(cor)) {
+      return res.status(400).json({ error: 'A cor deve estar no formato hexadecimal (#RRGGBB).' });
     }
 
     const updated = await db.area.update({
       where: { id: req.params.id },
-      data: { nome: nome.trim(), updatedByEmail: req.user!.email },
+      data: { nome: nome.trim(), cor: cor ?? null, updatedByEmail: req.user!.email },
       include: {
         users: {
           include: { user: { select: { id: true, nome: true, email: true } } },

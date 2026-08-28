@@ -7,6 +7,7 @@ import instituicoesRoutes from './routes/instituicoes.js';
 import usersRoutes from './routes/users.js';
 import projetosRoutes from './routes/projetos.js';
 import areasRoutes from './routes/areas.js';
+import ocorrenciasCalendarioRoutes from './routes/ocorrenciasCalendario.js';
 import dashboardRoutes from './routes/dashboard.js';
 import planosRoutes from './routes/planos.js';
 import mercadopagoRoutes from './routes/mercadopago.js';
@@ -31,7 +32,7 @@ app.set('trust proxy', 1);
 app.use(
   cors({
     origin: [
-      'http://localhost:3001',
+      'http://localhost:4001',
       'https://app.igrejaformosadecristo.com',
     ],
     credentials: true,
@@ -45,6 +46,7 @@ app.use('/users', usersRoutes);
 app.use('/eventos', eventosRoutes);
 app.use('/projetos', projetosRoutes);
 app.use('/areas', areasRoutes);
+app.use('/ocorrencias-calendario', ocorrenciasCalendarioRoutes);
 app.use('/dashboard', dashboardRoutes);
 app.use('/planos', planosRoutes);
 app.use('/mercadopago', mercadopagoRoutes);
@@ -56,8 +58,9 @@ app.use('/jobs', jobsRoutes);
 
 // Para desenvolvimento local
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(3000, () => {
-    console.log('Server is running on port 3000');
+  const port = Number(process.env.PORT) || 4000;
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
   });
 }
 
