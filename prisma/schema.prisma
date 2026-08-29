@@ -23,6 +23,8 @@ model Instituicao {
   planoAtribuidoPor     String?
   parceiroPiloto        Boolean                @default(false)
   // Overrides de split. null = herda o valor do plano.
+  splitTipo             TipoSplit?
+  splitValorFixo        Decimal?
   splitPercentual       Decimal?
   splitMinimo           Decimal?
   splitMaximo           Decimal?
@@ -36,10 +38,9 @@ model Instituicao {
   parcelas              Parcela[]
   projetos              Projeto[]
   plano                 Plano?                 @relation(fields: [planoId], references: [id])
-  mercadoPagoAccount    MercadoPagoAccount?
+  pagbankAccount        PagBankAccount?
   assinaturas           Assinatura[]
-  pagamentos            Pagamento[]
-  mpPagamentos          MpPagamento[]
+  pagbankPagamentos     PagBankPagamento[]
   contasBancarias       ContaBancaria[]
   categoriasFinanceiras CategoriaFinanceira[]
   fornecedores          Fornecedor[]
@@ -399,39 +400,45 @@ model AnexoProjeto {
   @@map("anexos_projeto")
 }
 
-// ==================== PLANOS E MERCADO PAGO ====================
+// ==================== PLANOS E PAGBANK ====================
 // Estrutura isolada. Nao substitui nem alimenta Parcela/ParticipanteProdutos.
+// Integracao anterior era Mercado Pago; migrada por completo para PagBank
+// (migration 20260828000000_pagbank). Sem tabela de compatibilidade: o
+// historico de pagamentos Mercado Pago foi descartado (decisao do produto).
 
-enum MercadoPagoAccountStatus {
+/**
+ * Como a taxa da plataforma é calculada sobre uma inscrição paga.
+ * PERCENTUAL usa percentual + piso/teto; FIXO cobra um valor em reais,
+ * independente do preço do produto.
+ */
+enum TipoSplit {
+  PERCENTUAL
+  FIXO
+}
+
+enum PagBankAccountStatus {
   PENDING
   ACTIVE
   EXPIRED
   REVOKED
 }
 
-enum MpPagamentoStatus {
-  PENDING
-  IN_PROCESS
-  APPROVED
-  REJECTED
+// Cobre os status de charge documentados pela API de Pedidos (Orders) do
+// PagBank. WAITING é o estado de um QR Code Pix ainda nao pago.
+enum PagBankPagamentoStatus {
+  WAITING
+  IN_ANALYSIS
+  AUTHORIZED
+  PAID
+  DECLINED
+  CANCELED
   REFUNDED
-  CANCELLED
-  CHARGED_BACK
 }
 
 enum AssinaturaStatus {
   PENDING
-  AUTHORIZED
-  PAUSED
-  CANCELLED
-}
-
-enum PagamentoStatus {
-  PENDING
-  IN_PROCESS
-  APPROVED
-  REJECTED
-  REFUNDED
+  ACTIVE
+  SUSPENDED
   CANCELLED
 }
 
@@ -443,9 +450,12 @@ model Plano {
   cobrancaSaaS        Boolean       @default(true)
   valorMensal         Decimal       @default(0)
   valorAnual          Decimal?
-  mpPreapprovalPlanId String?
+  // PLAN_xxxx criado na API de Assinaturas do PagBank (api.assinaturas.pagseguro.com).
+  pagbankPlanoId      String?
   // Padroes de split herdados pelas instituicoes.
   // Nomes feeEvento* preservados: as colunas ja existem no banco com dados.
+  feeEventoTipo       TipoSplit     @default(PERCENTUAL)
+  feeEventoValorFixo  Decimal       @default(0)
   feeEventoPercentual Decimal       @default(0)
   feeEventoMinimo     Decimal       @default(0)
   feeEventoMaximo     Decimal?
@@ -463,25 +473,31 @@ model Plano {
   @@map("planos")
 }
 
-// Tabelas abaixo (assinaturas, pagamentos, webhook_logs) ja existem no banco,
-// criadas pela migration 20260709000000_add_planos_e_pagamentos, e estao vazias.
-// Sao modeladas aqui apenas para o schema refletir o banco e o migrate diff
-// permanecer aditivo. NAO sao usadas pela integracao atual.
+/**
+ * Mensalidade da instituicao com a PLATAFORMA (nao confundir com PagBankPagamento,
+ * que sao as inscricoes pagas de eventos). Cobrada via API de Assinaturas do
+ * PagBank (produto separado do Orders/Connect: conta unica da plataforma,
+ * cartao do responsavel pela instituicao, sem OAuth por instituicao).
+ */
 model Assinatura {
-  id                 String           @id @default(uuid())
-  instituicaoId      String
-  planoId            String
-  mpPreapprovalId    String           @unique
-  valor              Decimal
-  periodicidade      String           @default("mensal")
-  status             AssinaturaStatus @default(PENDING)
-  proximaCobranca    DateTime?
-  canceladaEm        DateTime?
-  motivoCancelamento String?
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
-  instituicao        Instituicao      @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-  plano              Plano            @relation(fields: [planoId], references: [id])
+  id                  String           @id @default(uuid())
+  instituicaoId       String
+  planoId             String
+  // SUBS_xxxx / CUST_xxxx da API de Assinaturas.
+  pagbankAssinaturaId String           @unique
+  pagbankAssinanteId  String?
+  cardBrand           String?
+  cardUltimosDigitos  String?
+  valor               Decimal
+  periodicidade       String           @default("mensal")
+  status              AssinaturaStatus @default(PENDING)
+  proximaCobranca     DateTime?
+  canceladaEm         DateTime?
+  motivoCancelamento  String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  instituicao         Instituicao      @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  plano               Plano            @relation(fields: [planoId], references: [id])
 
   @@index([instituicaoId])
   @@index([planoId])
@@ -489,80 +505,33 @@ model Assinatura {
   @@map("assinaturas")
 }
 
-model Pagamento {
-  id                    String          @id @default(uuid())
-  instituicaoId         String
-  participanteId        String
-  participanteProdutoId String?
-  parcelaId             String?         @unique
-  mpPaymentId           String          @unique
-  idempotencyKey        String          @unique
-  status                PagamentoStatus @default(PENDING)
-  statusDetail          String?
-  valor                 Decimal
-  applicationFee        Decimal
-  feePercentualAplicado Decimal
-  metodoPagamento       String?
-  parcelasCartao        Int             @default(1)
-  aprovadoEm            DateTime?
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
-  instituicao           Instituicao     @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
-
-  @@index([instituicaoId])
-  @@index([participanteId])
-  @@index([participanteProdutoId])
-  @@index([status])
-  @@index([status, createdAt])
-  @@map("pagamentos")
-}
-
-model WebhookLog {
-  id           String    @id @default(uuid())
-  mpEventId    String
-  tipo         String
-  action       String?
-  payload      Json
-  processado   Boolean   @default(false)
-  erro         String?
-  tentativas   Int       @default(0)
-  processadoEm DateTime?
-  createdAt    DateTime  @default(now())
-
-  @@unique([mpEventId, tipo, action])
-  @@index([processado])
-  @@map("webhook_logs")
-}
-
-model MercadoPagoAccount {
-  id               String                   @id @default(uuid())
-  instituicaoId    String                   @unique
-  mpUserId         String // collector_id do vendedor
+model PagBankAccount {
+  id               String               @id @default(uuid())
+  instituicaoId    String               @unique
+  // account_id devolvido pelo OAuth Connect (ACCO_xxxx) — o vendedor/collector.
+  pagbankAccountId String
   accessTokenEnc   String // AES-256-GCM
   refreshTokenEnc  String
-  publicKey        String
   scope            String?
   expiresAt        DateTime
   refreshExpiresAt DateTime?
-  status           MercadoPagoAccountStatus @default(PENDING)
+  status           PagBankAccountStatus @default(PENDING)
   ultimoRefreshEm  DateTime?
   ultimoErro       String?
-  createdAt        DateTime                 @default(now())
-  updatedAt        DateTime                 @updatedAt
-  instituicao      Instituicao              @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  instituicao      Instituicao          @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
 
   @@index([instituicaoId])
   @@index([status])
-  @@map("mercado_pago_accounts")
+  @@map("pagbank_accounts")
 }
 
-// State anti-CSRF do fluxo OAuth + verifier do PKCE
+// State anti-CSRF do fluxo OAuth + verifier do PKCE. Nome generico: nao e
+// especifico de nenhum provedor, reaproveitavel por qualquer OAuth futuro.
 model OAuthNonce {
   nonce         String    @id
   instituicaoId String
-  // default("") apenas para permitir ADD COLUMN em tabela ja populada.
-  // Todo nonce criado pelo fluxo atual grava um verifier real; um nonce com
-  // verifier vazio e residual e sera rejeitado no callback.
   codeVerifier  String    @default("")
   consumidoEm   DateTime?
   expiraEm      DateTime
@@ -574,28 +543,33 @@ model OAuthNonce {
 
 // participanteId / participanteProdutoId sao referencias FRACAS (sem @relation)
 // para nao adicionar campos de volta nos models de inscricao.
-model MpPagamento {
-  id                      String            @id @default(uuid())
+model PagBankPagamento {
+  id                      String                 @id @default(uuid())
   instituicaoId           String
   participanteId          String
   participanteProdutoId   String?
   eventoId                String?
-  mpPreferenceId          String?           @unique
-  mpPaymentId             String?           @unique
-  externalReference       String            @unique
-  status                  MpPagamentoStatus @default(PENDING)
+  // ORDE_xxxx / CHAR_xxxx da API de Pedidos (Orders).
+  pagbankOrderId          String?                @unique
+  pagbankChargeId         String?                @unique
+  externalReference       String                 @unique
+  status                  PagBankPagamentoStatus @default(WAITING)
   statusDetail            String?
   valor                   Decimal
   splitValor              Decimal
   splitPercentualAplicado Decimal
   metodoPagamento         String?
-  parcelasCartao          Int               @default(1)
-  initPoint               String?
+  parcelasCartao          Int                    @default(1)
+  // Pix: QR Code exibido na nossa tela de pagamento (nao ha checkout hospedado
+  // quando ha split — ver docs/pagbank-implementacao.md).
+  qrCodeTexto             String?
+  qrCodeImagemUrl         String?
+  boletoUrl               String?
   expiraEm                DateTime?
   aprovadoEm              DateTime?
-  createdAt               DateTime          @default(now())
-  updatedAt               DateTime          @updatedAt
-  instituicao             Instituicao       @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+  instituicao             Instituicao            @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
 
   @@index([instituicaoId])
   @@index([participanteId])
@@ -603,27 +577,29 @@ model MpPagamento {
   @@index([eventoId])
   @@index([status])
   @@index([status, createdAt])
-  @@map("mp_pagamentos")
+  @@map("pagbank_pagamentos")
 }
 
-model MpWebhookLog {
-  id           String    @id @default(uuid())
-  mpEventId    String
-  tipo         String
-  // NAO usar String? aqui: no Postgres NULLs sao distintos entre si em indice
-  // unique, o que faria a dedup de reentrega falhar sempre que action viesse
-  // ausente. String vazia dedupa corretamente.
-  action       String    @default("")
-  payload      Json
-  processado   Boolean   @default(false)
-  erro         String?
-  tentativas   Int       @default(0)
-  processadoEm DateTime?
-  createdAt    DateTime  @default(now())
+// PagBank nao envia um id de evento distinto: reenvia o recurso (Order/Charge)
+// inteiro a cada mudanca de status. A dedup e pelo hash do corpo bruto — dois
+// envios com o mesmo status para o mesmo recurso tem o mesmo hash.
+model PagBankWebhookLog {
+  id              String    @id @default(uuid())
+  payloadHash     String    @unique
+  // Valor do header x-product-origin (ex.: "ORDER").
+  origem          String
+  pagbankOrderId  String?
+  pagbankChargeId String?
+  payload         Json
+  processado      Boolean   @default(false)
+  erro            String?
+  tentativas      Int       @default(0)
+  processadoEm    DateTime?
+  createdAt       DateTime  @default(now())
 
-  @@unique([mpEventId, tipo, action])
   @@index([processado])
-  @@map("mp_webhook_logs")
+  @@index([pagbankOrderId])
+  @@map("pagbank_webhook_logs")
 }
 
 // ==================== CONCILIACAO BANCARIA ====================

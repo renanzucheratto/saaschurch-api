@@ -1,225 +1,184 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import { prisma } from '../lib/prisma/client.js';
-import { validateWebhookSignature } from '../lib/mercadopago/signature.js';
-import { chamarMp, clientePagamento } from '../lib/mercadopago/client.js';
-import { getAccessTokenInstituicao } from '../lib/mercadopago/token.js';
-import { logMp, logMpErro } from '../lib/mercadopago/log.js';
-import type { MpPagamentoStatus } from '@prisma/client';
+import { validateWebhookSignature } from '../lib/pagbank/signature.js';
+import { getAccessTokenInstituicao } from '../lib/pagbank/token.js';
+import { consultarCharge } from '../lib/pagbank/orders.js';
+import { consultarAssinatura } from '../lib/pagbank/assinaturas.js';
+import { logPb, logPbErro } from '../lib/pagbank/log.js';
+import { registrarBaixaPagamento } from '../helpers/baixa-pagamento.helper.js';
+import type { PagBankPagamentoStatus, AssinaturaStatus } from '@prisma/client';
 
 const router = Router();
 
 /** Status terminais: uma reentrega fora de ordem não pode rebaixá-los. */
-const STATUS_TERMINAIS: MpPagamentoStatus[] = [
-  'APPROVED',
-  'REFUNDED',
-  'CHARGED_BACK',
-];
+const STATUS_TERMINAIS: PagBankPagamentoStatus[] = ['PAID', 'REFUNDED'];
 
-const MAPA_STATUS: Record<string, MpPagamentoStatus> = {
-  pending: 'PENDING',
-  in_process: 'IN_PROCESS',
-  in_mediation: 'IN_PROCESS',
-  authorized: 'IN_PROCESS',
-  approved: 'APPROVED',
-  rejected: 'REJECTED',
-  refunded: 'REFUNDED',
-  cancelled: 'CANCELLED',
-  charged_back: 'CHARGED_BACK',
+const MAPA_STATUS: Record<string, PagBankPagamentoStatus> = {
+  WAITING: 'WAITING',
+  IN_ANALYSIS: 'IN_ANALYSIS',
+  AUTHORIZED: 'AUTHORIZED',
+  PAID: 'PAID',
+  DECLINED: 'DECLINED',
+  CANCELED: 'CANCELED',
+  REFUNDED: 'REFUNDED',
 };
 
 /**
- * POST /webhooks/mercadopago - rota PÚBLICA, autenticada por assinatura HMAC.
+ * POST /webhooks/pagbank - rota PÚBLICA, autenticada por x-authenticity-token.
  *
- * O manifest do x-signature não usa o corpo da requisição, então o
- * express.json() global de server.ts serve — não é preciso raw body parser.
+ * O manifest da assinatura USA o corpo da requisição — diferente do Mercado
+ * Pago — então a validação depende do buffer bruto capturado pelo `verify`
+ * do `express.json()` em server.ts (`req.rawBody`). Sem esse buffer, a
+ * assinatura nunca fecha.
  *
- * Escreve exclusivamente em mp_pagamentos e mp_webhook_logs. Não cria Parcela,
- * não altera ParticipanteProdutos, não toca data_pagamento.
- *
- * A função tem 10s de teto na Vercel: validar, logar, buscar 1 pagamento,
- * atualizar. Nada de e-mail síncrono aqui.
+ * Ao confirmar um pagamento, lança uma Parcela e marca data_pagamento na
+ * inscrição — sem isso a organização do evento vê como pendente algo que já
+ * foi pago. Ver `registrarBaixaPagamento`, que é idempotente.
  */
-router.post('/mercadopago', async (req: Request, res: Response) => {
+router.post('/pagbank', async (req: Request, res: Response) => {
   const corpo = req.body ?? {};
+  const rawBody = (req as Request & { rawBody?: string }).rawBody ?? '';
+  const ref = req.query.ref ? String(req.query.ref) : undefined;
 
-  // data.id pode vir no corpo ou na query, dependendo do tipo de notificação.
-  const dataId =
-    corpo?.data?.id !== undefined
-      ? String(corpo.data.id)
-      : req.query['data.id']
-        ? String(req.query['data.id'])
-        : req.query.id
-          ? String(req.query.id)
-          : undefined;
+  const pedidoId: string | undefined = corpo?.id;
+  const chargeId: string | undefined = corpo?.charges?.[0]?.id;
 
-  const validacao = validateWebhookSignature({
-    xSignature: req.headers['x-signature'] as string | undefined,
-    xRequestId: req.headers['x-request-id'] as string | undefined,
-    dataId,
+  logPb('webhook.recebido', {
+    ref: ref ?? null,
+    origem: req.headers['x-product-origin'] ?? null,
+    pagbankOrderId: pedidoId ?? null,
+    pagbankChargeId: chargeId ?? null,
   });
 
-  logMp('webhook.recebido', {
-    dataId,
-    ref: req.query.ref ? String(req.query.ref) : null,
-    tipo: String(corpo.type || corpo.topic || req.query.type || 'desconhecido'),
-    action: String(corpo.action || ''),
-    liveMode: corpo.live_mode ?? null,
-    assinaturaValida: validacao.valido,
-    motivoAssinatura: validacao.valido ? null : validacao.motivo,
+  if (!ref) {
+    // Sem ref não há como saber a instituição (e portanto o token) que valida
+    // a assinatura nem que grava o pagamento. Aceita e ignora — não é um erro
+    // nosso, mas também não há o que processar.
+    return res.status(200).json({ recebido: true, vinculado: false });
+  }
+
+  const pagamento = await prisma.pagBankPagamento.findUnique({
+    where: { externalReference: ref },
+  });
+
+  if (!pagamento) {
+    return res.status(200).json({ recebido: true, vinculado: false });
+  }
+
+  let accessToken: string;
+
+  try {
+    accessToken = await getAccessTokenInstituicao(pagamento.instituicaoId);
+  } catch (error) {
+    logPbErro('webhook.recebido', {
+      ref,
+      etapa: 'obter_token',
+      mensagem: String((error as Error)?.message ?? error),
+    });
+    // 200: reenviar não vai ajudar se a conta está desconectada; fica como
+    // não processado no log para investigação manual.
+    return res.status(200).json({ recebido: true, vinculado: false, motivo: 'sem_token' });
+  }
+
+  const validacao = validateWebhookSignature({
+    xAuthenticityToken: req.headers['x-authenticity-token'] as string | undefined,
+    accountToken: accessToken,
+    rawBody,
   });
 
   if (!validacao.valido) {
-    console.error('Webhook Mercado Pago rejeitado:', validacao.motivo);
+    logPbErro('webhook.recebido', {
+      ref,
+      etapa: 'assinatura',
+      motivo: validacao.motivo,
+      candidatosTestados: validacao.candidatosTestados,
+      headerPresente: Boolean(req.headers['x-authenticity-token']),
+      tamanhoCorpoBruto: rawBody.length,
+    });
     return res.status(401).json({ error: 'Assinatura inválida' });
   }
 
-  const tipo = String(corpo.type || corpo.topic || req.query.type || 'desconhecido');
-  const action = String(corpo.action || '');
-  const mpEventId = String(corpo.id || dataId || '');
+  logPb('webhook.recebido', { ref, etapa: 'assinatura_ok', tokenUsado: validacao.tokenUsado });
 
-  if (!mpEventId) {
-    return res.status(400).json({ error: 'Notificação sem identificador' });
-  }
+  const payloadHash = crypto.createHash('sha256').update(rawBody).digest('hex');
 
   let logId: string;
 
   try {
-    const existente = await prisma.mpWebhookLog.findUnique({
-      where: { mpEventId_tipo_action: { mpEventId, tipo, action } },
-    });
+    const existente = await prisma.pagBankWebhookLog.findUnique({ where: { payloadHash } });
 
-    // Reentrega de algo já processado: responde 200 e sai.
     if (existente?.processado) {
       return res.status(200).json({ recebido: true, duplicado: true });
     }
 
     const log = existente
-      ? await prisma.mpWebhookLog.update({
+      ? await prisma.pagBankWebhookLog.update({
           where: { id: existente.id },
           data: { tentativas: { increment: 1 }, payload: corpo },
         })
-      : await prisma.mpWebhookLog.create({
-          data: { mpEventId, tipo, action, payload: corpo, tentativas: 1 },
+      : await prisma.pagBankWebhookLog.create({
+          data: {
+            payloadHash,
+            origem: String(req.headers['x-product-origin'] ?? 'desconhecido'),
+            pagbankOrderId: pedidoId ?? null,
+            pagbankChargeId: chargeId ?? null,
+            payload: corpo,
+            tentativas: 1,
+          },
         });
 
     logId = log.id;
   } catch (error) {
-    console.error('Erro ao registrar webhook Mercado Pago:', error);
+    console.error('Erro ao registrar webhook PagBank:', error);
     return res.status(500).json({ error: 'Erro ao registrar notificação' });
   }
 
   try {
-    // Só pagamento interessa nesta entrega. Outros tópicos ficam logados.
-    if (tipo !== 'payment') {
-      await prisma.mpWebhookLog.update({
+    if (!chargeId) {
+      await prisma.pagBankWebhookLog.update({
         where: { id: logId },
-        data: { processado: true, processadoEm: new Date() },
-      });
-      return res.status(200).json({ recebido: true, ignorado: tipo });
-    }
-
-    if (!dataId) {
-      await prisma.mpWebhookLog.update({
-        where: { id: logId },
-        data: { processado: true, processadoEm: new Date(), erro: 'sem data.id' },
+        data: { processado: true, processadoEm: new Date(), erro: 'sem charge id' },
       });
       return res.status(200).json({ recebido: true });
     }
 
-    // A notificação do MP carrega apenas data.id (o payment). O external
-    // reference vai no query da notification_url que nós mesmos montamos na
-    // criação da preference — é o que amarra o payment à instituição.
-    const ref = req.query.ref ? String(req.query.ref) : undefined;
-
-    const pagamento = ref
-      ? await prisma.mpPagamento.findUnique({ where: { externalReference: ref } })
-      : await prisma.mpPagamento.findFirst({ where: { mpPaymentId: dataId } });
-
-    logMp('webhook.vinculo', {
-      dataId,
-      ref: ref ?? null,
-      encontrado: Boolean(pagamento),
-      mpPagamentoId: pagamento?.id ?? null,
-      instituicaoId: pagamento?.instituicaoId ?? null,
-      statusLocal: pagamento?.status ?? null,
+    logPb('webhook.vinculo', {
+      chargeId,
+      ref,
+      pagamentoId: pagamento.id,
+      instituicaoId: pagamento.instituicaoId,
+      statusLocal: pagamento.status,
     });
-
-    if (!pagamento) {
-      // Pode ser pagamento de outra origem na mesma conta. Não é erro nosso.
-      await prisma.mpWebhookLog.update({
-        where: { id: logId },
-        data: {
-          processado: true,
-          processadoEm: new Date(),
-          erro: 'pagamento não encontrado localmente',
-        },
-      });
-      return res.status(200).json({ recebido: true, vinculado: false });
-    }
-
-    const accessToken = await getAccessTokenInstituicao(pagamento.instituicaoId);
 
     // Nunca confiar no status do payload: consultar a fonte.
-    const pagamentoMp = await chamarMp(`GET /v1/payments/${dataId}`, () =>
-      clientePagamento(accessToken).get({ id: dataId }),
-    );
+    const charge = await consultarCharge(accessToken, chargeId);
 
-    // Retrato do payment na fonte: é aqui que aparece por que o MP recusou
-    // (status_detail) e quanto de fato foi para cada lado do split.
-    logMp('webhook.payment', {
-      mpPaymentId: pagamentoMp.id ?? null,
-      status: pagamentoMp.status ?? null,
-      statusDetail: pagamentoMp.status_detail ?? null,
-      metodo: pagamentoMp.payment_method_id ?? null,
-      tipoMetodo: pagamentoMp.payment_type_id ?? null,
-      valor: pagamentoMp.transaction_amount ?? null,
-      taxaMarketplace:
-        (pagamentoMp as { application_fee?: unknown }).application_fee ?? null,
-      liquidoRecebedor:
-        pagamentoMp.transaction_details?.net_received_amount ?? null,
-      parcelas: pagamentoMp.installments ?? null,
-      liveMode: pagamentoMp.live_mode ?? null,
-      collectorId: (pagamentoMp as { collector_id?: unknown }).collector_id ?? null,
-      externalReference: pagamentoMp.external_reference ?? null,
+    logPb('webhook.charge', {
+      chargeId: charge.id,
+      status: charge.status,
+      metodo: charge.payment_method?.type ?? null,
+      valor: charge.amount?.value ?? null,
+      mensagem: charge.payment_response?.message ?? null,
     });
 
-    // O ref vem de uma URL que nós montamos, mas quem chama o webhook é externo.
-    // Conferir que o payment realmente aponta para este registro evita que uma
-    // notificação com ref trocado atualize o pagamento errado.
-    if (
-      pagamentoMp.external_reference &&
-      pagamentoMp.external_reference !== pagamento.externalReference
-    ) {
-      await prisma.mpWebhookLog.update({
+    if (charge.reference_id && charge.reference_id !== pagamento.externalReference) {
+      await prisma.pagBankWebhookLog.update({
         where: { id: logId },
         data: {
           processado: true,
           processadoEm: new Date(),
-          erro: 'external_reference divergente',
+          erro: 'reference_id divergente',
         },
       });
       return res.status(200).json({ recebido: true, vinculado: false });
     }
 
-    // Todo campo do PaymentResponse é opcional no SDK: sem status não dá para
-    // decidir transição, e assumir PENDING poderia rebaixar um pagamento pago.
-    if (!pagamentoMp.status) {
-      await prisma.mpWebhookLog.update({
-        where: { id: logId },
-        data: {
-          processado: true,
-          processadoEm: new Date(),
-          erro: 'payment sem status',
-        },
-      });
-      return res.status(200).json({ recebido: true, vinculado: false });
-    }
-
-    const novoStatus = MAPA_STATUS[pagamentoMp.status] ?? 'PENDING';
+    const novoStatus = MAPA_STATUS[charge.status] ?? 'IN_ANALYSIS';
 
     // Transição só avança: reentrega antiga não rebaixa um estado terminal.
     if (STATUS_TERMINAIS.includes(pagamento.status) && novoStatus !== pagamento.status) {
-      await prisma.mpWebhookLog.update({
+      await prisma.pagBankWebhookLog.update({
         where: { id: logId },
         data: {
           processado: true,
@@ -230,54 +189,106 @@ router.post('/mercadopago', async (req: Request, res: Response) => {
       return res.status(200).json({ recebido: true, ignorado: 'status_terminal' });
     }
 
-    await prisma.mpPagamento.update({
+    await prisma.pagBankPagamento.update({
       where: { id: pagamento.id },
       data: {
-        // id vem opcional no tipo do SDK; o data.id da notificação é o mesmo
-        // payment e já foi usado para buscá-lo.
-        mpPaymentId: pagamentoMp.id !== undefined ? String(pagamentoMp.id) : dataId,
+        pagbankChargeId: charge.id,
         status: novoStatus,
-        statusDetail: pagamentoMp.status_detail ?? null,
-        metodoPagamento: pagamentoMp.payment_method_id ?? null,
-        parcelasCartao: pagamentoMp.installments ?? 1,
-        aprovadoEm:
-          novoStatus === 'APPROVED'
-            ? pagamentoMp.date_approved
-              ? new Date(pagamentoMp.date_approved)
-              : new Date()
-            : pagamento.aprovadoEm,
+        statusDetail: charge.payment_response?.message ?? null,
+        metodoPagamento: charge.payment_method?.type ?? pagamento.metodoPagamento,
+        aprovadoEm: novoStatus === 'PAID' ? new Date() : pagamento.aprovadoEm,
       },
     });
 
-    await prisma.mpWebhookLog.update({
+    await prisma.pagBankWebhookLog.update({
       where: { id: logId },
       data: { processado: true, processadoEm: new Date(), erro: null },
     });
 
-    logMp('webhook.aplicado', {
-      mpPagamentoId: pagamento.id,
+    logPb('webhook.aplicado', {
+      pagamentoId: pagamento.id,
       instituicaoId: pagamento.instituicaoId,
       de: pagamento.status,
       para: novoStatus,
-      statusDetail: pagamentoMp.status_detail ?? null,
     });
+
+    // Aprovado: lança a parcela para a inscrição aparecer como paga na tela
+    // do evento. Idempotente — o cartão já pode ter lançado no fluxo síncrono.
+    if (novoStatus === 'PAID') {
+      await registrarBaixaPagamento(pagamento.id);
+    }
 
     return res.status(200).json({ recebido: true, status: novoStatus });
   } catch (error: any) {
     const mensagem = String(error?.message ?? error).slice(0, 500);
-    logMpErro('webhook.recebido', {
-      dataId,
-      etapa: 'processamento',
-      mensagem,
-      corpo: error?.corpo ?? null,
-    });
-    console.error('Erro ao processar webhook Mercado Pago:', mensagem);
+    logPbErro('webhook.recebido', { chargeId, etapa: 'processamento', mensagem });
+    console.error('Erro ao processar webhook PagBank:', mensagem);
 
-    await prisma.mpWebhookLog
+    await prisma.pagBankWebhookLog
       .update({ where: { id: logId }, data: { erro: mensagem } })
       .catch(() => undefined);
 
-    // 500 faz o Mercado Pago reenviar a notificação.
+    // 500 faz o PagBank reenviar a notificação.
+    return res.status(500).json({ error: 'Erro ao processar notificação' });
+  }
+});
+
+const MAPA_STATUS_ASSINATURA: Record<string, AssinaturaStatus> = {
+  NEW: 'PENDING',
+  ACTIVE: 'ACTIVE',
+  SUSPENDED: 'SUSPENDED',
+  OVERDUE: 'ACTIVE', // em atraso, mas ainda ativa — cobrança será retentada
+  CANCELED: 'CANCELLED',
+  EXPIRED: 'CANCELLED',
+};
+
+/**
+ * POST /webhooks/pagbank-assinaturas - rota PÚBLICA (mensalidade da
+ * plataforma, produto Assinaturas — não confundir com o webhook de Orders
+ * acima, que é o pagamento de inscrições de evento).
+ *
+ * A documentação da API de Assinaturas não especifica um header de
+ * autenticidade (ao contrário de Orders, que usa x-authenticity-token) — por
+ * isso esta rota NÃO confia em nada do corpo recebido: usa o `resource.id`
+ * só para saber QUAL assinatura consultar, e escreve no banco apenas o que
+ * `consultarAssinatura` (GET direto na API, com o token da plataforma)
+ * devolver. Um payload forjado, na pior hipótese, causa uma consulta
+ * redundante — nunca um dado falso persistido.
+ */
+router.post('/pagbank-assinaturas', async (req: Request, res: Response) => {
+  const corpo = req.body ?? {};
+  const assinaturaId: string | undefined = corpo?.resource?.id;
+
+  logPb('assinatura.webhook', { evento: corpo?.event ?? null, assinaturaId: assinaturaId ?? null });
+
+  if (!assinaturaId) {
+    return res.status(200).json({ recebido: true });
+  }
+
+  try {
+    const assinatura = await prisma.assinatura.findUnique({
+      where: { pagbankAssinaturaId: assinaturaId },
+    });
+
+    if (!assinatura) {
+      return res.status(200).json({ recebido: true, vinculado: false });
+    }
+
+    const fonte = await consultarAssinatura(assinaturaId);
+    const novoStatus = MAPA_STATUS_ASSINATURA[fonte.status] ?? assinatura.status;
+
+    await prisma.assinatura.update({
+      where: { id: assinatura.id },
+      data: {
+        status: novoStatus,
+        proximaCobranca: fonte.next_invoice_at ? new Date(fonte.next_invoice_at) : assinatura.proximaCobranca,
+        canceladaEm: novoStatus === 'CANCELLED' ? (assinatura.canceladaEm ?? new Date()) : assinatura.canceladaEm,
+      },
+    });
+
+    return res.status(200).json({ recebido: true, status: novoStatus });
+  } catch (error) {
+    console.error('Erro ao processar webhook de assinatura PagBank:', error);
     return res.status(500).json({ error: 'Erro ao processar notificação' });
   }
 });

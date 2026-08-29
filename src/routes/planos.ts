@@ -391,7 +391,14 @@ router.put(
   async (req: AuthRequest, res: Response) => {
     try {
       const id = paramString(req.params.id);
-      const { splitPercentual, splitMinimo, splitMaximo, splitObservacao } = req.body;
+      const {
+        splitTipo,
+        splitValorFixo,
+        splitPercentual,
+        splitMinimo,
+        splitMaximo,
+        splitObservacao,
+      } = req.body;
 
       const instituicao = await prisma.instituicao.findUnique({
         where: { id },
@@ -405,6 +412,9 @@ router.put(
       // Valida a combinação final (override novo + o que permanece), não só o
       // que veio no corpo: mandar só splitMaximo poderia deixar maximo < minimo.
       const combinado = {
+        splitTipo: splitTipo !== undefined ? splitTipo : instituicao.splitTipo,
+        splitValorFixo:
+          splitValorFixo !== undefined ? splitValorFixo : instituicao.splitValorFixo,
         splitPercentual:
           splitPercentual !== undefined ? splitPercentual : instituicao.splitPercentual,
         splitMinimo: splitMinimo !== undefined ? splitMinimo : instituicao.splitMinimo,
@@ -412,6 +422,9 @@ router.put(
       };
 
       const erros = validarOverridesSplit({
+        splitTipo: combinado.splitTipo,
+        splitValorFixo:
+          combinado.splitValorFixo === null ? null : Number(combinado.splitValorFixo),
         splitPercentual:
           combinado.splitPercentual === null ? null : Number(combinado.splitPercentual),
         splitMinimo: combinado.splitMinimo === null ? null : Number(combinado.splitMinimo),
@@ -425,6 +438,8 @@ router.put(
       const atualizada = await prisma.instituicao.update({
         where: { id },
         data: {
+          splitTipo: combinado.splitTipo,
+          splitValorFixo: combinado.splitValorFixo,
           splitPercentual: combinado.splitPercentual,
           splitMinimo: combinado.splitMinimo,
           splitMaximo: combinado.splitMaximo,

@@ -2,53 +2,177 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma/client.js';
 import { verifyRecaptcha } from '../middleware/recaptcha.js';
+import { PagBankError } from '../lib/pagbank/client.js';
 import {
-  chamarMp,
-  clientePreference,
-  type PreferenceRequestMp,
-} from '../lib/mercadopago/client.js';
+  criarPedidoComCartao,
+  criarPedidoComPix,
+  criarPedidoComBoleto,
+  obterChavePublicaOrders,
+  type SplitPedido,
+} from '../lib/pagbank/orders.js';
 import {
   getAccessTokenInstituicao,
-  ContaMercadoPagoIndisponivel,
-} from '../lib/mercadopago/token.js';
-import {
-  impressaoToken,
-  logMp,
-  logMpErro,
-  mascarar,
-} from '../lib/mercadopago/log.js';
+  ContaPagBankIndisponivel,
+} from '../lib/pagbank/token.js';
+import { impressaoToken, logPb, logPbErro, mascarar } from '../lib/pagbank/log.js';
 import { resolveRegraSplit, calcularSplit } from '../helpers/split.helper.js';
+import { registrarBaixaPagamento } from '../helpers/baixa-pagamento.helper.js';
+import { sincronizarPagamento } from '../helpers/sincronizar-pagamento.helper.js';
+import {
+  resolverDadosParticipante,
+  cpfValido,
+  emailValido,
+} from '../helpers/dados-participante.helper.js';
+import type { PagBankPagamentoStatus } from '@prisma/client';
 
 const router = Router();
 
-/** Validade da preference. Curta para não segurar vaga indefinidamente. */
-const VALIDADE_PREFERENCE_MS = 60 * 60 * 1000; // 1h
+/** Validade do PIX e do pedido pendente antes de permitir gerar outro. */
+const VALIDADE_PEDIDO_MS = 60 * 60 * 1000; // 1h
+const VALIDADE_BOLETO_DIAS = 3;
 
-function primeiroNomeESobrenome(nome?: string | null): { nome: string; sobrenome: string } {
-  const limpo = (nome || '').trim();
-  if (!limpo) return { nome: '', sobrenome: '' };
-  const partes = limpo.split(/\s+/);
-  return {
-    nome: partes[0] || '',
-    sobrenome: partes.slice(1).join(' '),
-  };
+type MetodoPagamento = 'PIX' | 'BOLETO' | 'CREDIT_CARD';
+
+/** Mapeia o status inicial do charge devolvido pelo PagBank para o nosso enum. */
+const MAPA_STATUS: Record<string, PagBankPagamentoStatus> = {
+  WAITING: 'WAITING',
+  IN_ANALYSIS: 'IN_ANALYSIS',
+  AUTHORIZED: 'AUTHORIZED',
+  PAID: 'PAID',
+  DECLINED: 'DECLINED',
+  CANCELED: 'CANCELED',
+  REFUNDED: 'REFUNDED',
+};
+
+function envObrigatoria(nome: string): string {
+  const valor = process.env[nome];
+  if (!valor) throw new Error(`${nome} não configurada`);
+  return valor;
 }
 
 /**
- * POST /checkout/preferences - rota PÚBLICA
+ * GET /checkout/chave-publica - rota PÚBLICA.
  *
- * O participante não é usuário do sistema, mesma premissa da inscrição pública
- * em eventos.ts. Por isso: reCAPTCHA obrigatório e valor sempre lido do banco.
- *
- * Só LÊ ParticipanteProdutos/ProdutosEvento. Não escreve em Parcela nem em
- * nenhuma tabela do fluxo financeiro existente.
+ * Chave pública da INSTITUIÇÃO dona do produto, para o formulário de cartão
+ * cifrar os dados com `PagSeguro.encryptCard()` antes de chamar POST /pedidos.
  */
-router.post('/preferences', async (req: Request, res: Response) => {
+router.get('/chave-publica', async (req: Request, res: Response) => {
   try {
-    const { participanteId, produtoId, recaptchaToken } = req.body;
+    const produtoId = String(req.query.produtoId || '');
+
+    if (!produtoId) {
+      return res.status(400).json({ error: 'produtoId é obrigatório' });
+    }
+
+    const produto = await prisma.produtosEvento.findUnique({
+      where: { id: produtoId },
+      include: { evento: true },
+    });
+
+    const instituicaoId = produto?.instituicaoId || produto?.evento?.instituicaoId;
+
+    if (!instituicaoId) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
+    const accessToken = await getAccessTokenInstituicao(instituicaoId);
+    const chave = await obterChavePublicaOrders(accessToken);
+
+    return res.status(200).json({ publicKey: chave.public_key });
+  } catch (error) {
+    if (error instanceof ContaPagBankIndisponivel) {
+      return res.status(409).json({ error: error.message, motivo: error.motivo });
+    }
+    console.error('Erro ao obter chave pública do checkout:', error);
+    return res.status(502).json({ error: 'Não foi possível obter a chave pública do PagBank' });
+  }
+});
+
+/**
+ * Mínimo por parcela aceito pelo PagBank. Abaixo disso o pedido é recusado com
+ * "THE INSTALLMENT AMOUNT IS LESS THAN THE MINIMUM AMOUNT ALLOWED" — verificado
+ * contra a sandbox: R$ 10,00 passa em 2x (R$ 5,00) e falha em 4x (R$ 2,50).
+ */
+const MINIMO_POR_PARCELA = 5;
+const MAX_PARCELAS = 12;
+
+export function maxParcelas(valor: number): number {
+  return Math.max(1, Math.min(MAX_PARCELAS, Math.floor(valor / MINIMO_POR_PARCELA)));
+}
+
+/**
+ * GET /checkout/resumo - rota PÚBLICA.
+ *
+ * O que está sendo cobrado e em quantas vezes cabe. Sem isto a tela pediria
+ * cartão sem nunca dizer o valor, e ofereceria parcelamentos que o PagBank
+ * recusa por valor mínimo de parcela.
+ */
+router.get('/resumo', async (req: Request, res: Response) => {
+  try {
+    const participanteId = String(req.query.participanteId || '');
+    const produtoId = String(req.query.produtoId || '');
 
     if (!participanteId || !produtoId) {
       return res.status(400).json({ error: 'participanteId e produtoId são obrigatórios' });
+    }
+
+    const pp = await prisma.participanteProdutos.findUnique({
+      where: { participanteId_produtoId: { participanteId, produtoId } },
+      include: { produto: { select: { nome: true, valor: true, exigePagamento: true } } },
+    });
+
+    if (!pp) {
+      return res.status(404).json({ error: 'Inscrição não encontrada' });
+    }
+
+    const valor = Number(pp.produto.valor);
+
+    return res.status(200).json({
+      produtoNome: pp.produto.nome,
+      valor,
+      exigePagamento: pp.produto.exigePagamento,
+      maxParcelas: maxParcelas(valor),
+    });
+  } catch (error) {
+    console.error('Erro ao obter resumo do checkout:', error);
+    return res.status(500).json({ error: 'Erro ao obter resumo' });
+  }
+});
+
+/**
+ * POST /checkout/pedidos - rota PÚBLICA
+ *
+ * O participante não é usuário do sistema, mesma premissa da inscrição
+ * pública em eventos.ts. Por isso: reCAPTCHA obrigatório e valor sempre lido
+ * do banco.
+ *
+ * Diferente do antigo fluxo Mercado Pago (preference + redirect), o PagBank
+ * não aceita split no checkout hospedado — só em /orders. Por isso esta rota
+ * cria o pedido diretamente (PIX/boleto/cartão) e devolve os dados para a
+ * NOSSA tela de pagamento (/inscricao/pagamento) exibir, em vez de devolver
+ * um link de redirect.
+ */
+router.post('/pedidos', async (req: Request, res: Response) => {
+  try {
+    const { participanteId, produtoId, recaptchaToken, metodoPagamento, cartao, contato } = req.body as {
+      participanteId?: string;
+      produtoId?: string;
+      recaptchaToken?: string;
+      metodoPagamento?: MetodoPagamento;
+      cartao?: { encrypted?: string; securityCode?: string; parcelas?: number };
+      contato?: { email?: string; cpf?: string };
+    };
+
+    if (!participanteId || !produtoId) {
+      return res.status(400).json({ error: 'participanteId e produtoId são obrigatórios' });
+    }
+
+    if (!metodoPagamento || !['PIX', 'BOLETO', 'CREDIT_CARD'].includes(metodoPagamento)) {
+      return res.status(400).json({ error: 'metodoPagamento inválido (PIX, BOLETO ou CREDIT_CARD)' });
+    }
+
+    if (metodoPagamento === 'CREDIT_CARD' && (!cartao?.encrypted || !cartao?.securityCode)) {
+      return res.status(400).json({ error: 'Dados do cartão ausentes' });
     }
 
     if (!recaptchaToken) {
@@ -63,7 +187,14 @@ router.post('/preferences', async (req: Request, res: Response) => {
       where: { participanteId_produtoId: { participanteId, produtoId } },
       include: {
         produto: true,
-        participante: { include: { evento: true } },
+        participante: {
+          include: {
+            evento: true,
+            // Em evento com campos customizados o e-mail e o CPF vivem aqui,
+            // não nas colunas do participante.
+            respostasCustomizadas: { include: { campo: { select: { tipo: true } } } },
+          },
+        },
       },
     });
 
@@ -87,8 +218,8 @@ router.post('/preferences', async (req: Request, res: Response) => {
     }
 
     // Idempotência: pago não se cobra de novo.
-    const jaAprovado = await prisma.mpPagamento.findFirst({
-      where: { participanteProdutoId: participanteProduto.id, status: 'APPROVED' },
+    const jaAprovado = await prisma.pagBankPagamento.findFirst({
+      where: { participanteProdutoId: participanteProduto.id, status: 'PAID' },
     });
 
     if (jaAprovado) {
@@ -98,37 +229,21 @@ router.post('/preferences', async (req: Request, res: Response) => {
       });
     }
 
-    // Preference pendente ainda válida: devolve a mesma em vez de criar outra.
-    const pendente = await prisma.mpPagamento.findFirst({
+    // Pedido pendente do MESMO método ainda válido: devolve o mesmo em vez de
+    // criar outro (evita QR/boleto duplicado a cada F5 da tela de pagamento).
+    const pendente = await prisma.pagBankPagamento.findFirst({
       where: {
         participanteProdutoId: participanteProduto.id,
-        status: { in: ['PENDING', 'IN_PROCESS'] },
-        initPoint: { not: null },
+        status: { in: ['WAITING', 'IN_ANALYSIS', 'AUTHORIZED'] },
+        metodoPagamento,
         expiraEm: { gt: new Date() },
       },
       orderBy: { createdAt: 'desc' },
     });
 
     if (pendente) {
-      // Reuso: um init_point criado com configuração ruim continua sendo
-      // devolvido por até 1h. Se o erro persiste "sem motivo", é aqui.
-      logMp('preference.ok', {
-        instituicaoId,
-        reaproveitada: true,
-        mpPagamentoId: pendente.id,
-        preferenceId: pendente.mpPreferenceId,
-        externalReference: pendente.externalReference,
-        criadaEm: pendente.createdAt.toISOString(),
-        expiraEm: pendente.expiraEm?.toISOString() ?? null,
-        splitValor: Number(pendente.splitValor),
-        valor: Number(pendente.valor),
-      });
-
-      return res.status(200).json({
-        init_point: pendente.initPoint,
-        mpPagamentoId: pendente.id,
-        reaproveitada: true,
-      });
+      logPb('pedido.ok', { instituicaoId, reaproveitado: true, pagamentoId: pendente.id });
+      return res.status(200).json(serializarPagamento(pendente));
     }
 
     const instituicao = await prisma.instituicao.findUnique({
@@ -140,22 +255,20 @@ router.post('/preferences', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Instituição não encontrada' });
     }
 
-    // Conta MP gravada: serve de gabarito para conferir, depois, se a
-    // preference nasceu debaixo do collector certo.
-    const contaMp = await prisma.mercadoPagoAccount.findUnique({
+    const contaPb = await prisma.pagBankAccount.findUnique({
       where: { instituicaoId },
-      select: { mpUserId: true, status: true, scope: true, expiresAt: true },
+      select: { pagbankAccountId: true, status: true, scope: true },
     });
 
-    logMp('preference.inicio', {
+    logPb('pedido.inicio', {
       instituicaoId,
       instituicao: instituicao.nome,
       participanteId,
       produtoId,
       participanteProdutoId: participanteProduto.id,
-      mpUserIdGravado: contaMp?.mpUserId ?? null,
-      contaStatus: contaMp?.status ?? null,
-      contaScope: contaMp?.scope ?? null,
+      metodoPagamento,
+      pagbankAccountIdGravado: contaPb?.pagbankAccountId ?? null,
+      contaStatus: contaPb?.status ?? null,
     });
 
     let accessToken: string;
@@ -163,244 +276,380 @@ router.post('/preferences', async (req: Request, res: Response) => {
     try {
       accessToken = await getAccessTokenInstituicao(instituicaoId);
     } catch (error) {
-      if (error instanceof ContaMercadoPagoIndisponivel) {
-        logMpErro('preference.erro', {
-          instituicaoId,
-          etapa: 'obter_token',
-          motivo: error.motivo,
-        });
+      if (error instanceof ContaPagBankIndisponivel) {
+        logPbErro('pedido.erro', { instituicaoId, etapa: 'obter_token', motivo: error.motivo });
         return res.status(409).json({ error: error.message, motivo: error.motivo });
       }
       throw error;
     }
 
-    // O valor vem SEMPRE do banco. Aceitar valor do corpo deixaria o comprador
-    // escolher quanto pagar.
-    const valor = Number(produto.valor);
+    // O valor vem SEMPRE do banco. Aceitar valor do corpo deixaria o
+    // comprador escolher quanto pagar.
+    const valorReais = Number(produto.valor);
 
-    if (!Number.isFinite(valor) || valor <= 0) {
+    if (!Number.isFinite(valorReais) || valorReais <= 0) {
       return res.status(400).json({ error: 'Produto com valor inválido' });
     }
 
     const regra = resolveRegraSplit(instituicao, instituicao.plano);
-    const splitValor = calcularSplit(valor, regra);
+    const splitValorReais = calcularSplit(valorReais, regra);
 
-    logMp('preference.split', {
+    logPb('pedido.split', {
       instituicaoId,
-      valorProduto: valor,
+      valorProduto: valorReais,
       regra,
-      splitValor,
-      liquidoInstituicao: Math.round((valor - splitValor) * 100) / 100,
+      splitValor: splitValorReais,
+      liquidoInstituicao: Math.round((valorReais - splitValorReais) * 100) / 100,
     });
 
-    // O Mercado Pago recusa processar quando a comissão come o valor inteiro:
-    // o vendedor receberia zero. A preference é CRIADA normalmente e só quebra
-    // no pagamento, com erro genérico — por isso o alerta tem de sair aqui.
-    if (splitValor >= valor) {
-      logMpErro('preference.alerta', {
+    if (splitValorReais >= valorReais) {
+      logPbErro('pedido.alerta', {
         instituicaoId,
-        alerta: 'marketplace_fee_maior_ou_igual_ao_valor',
-        valorProduto: valor,
-        splitValor,
-        detalhe:
-          'marketplace_fee >= transaction_amount: o MP tende a falhar no processamento do pagamento',
+        alerta: 'split_maior_ou_igual_ao_valor',
+        valorProduto: valorReais,
+        splitValor: splitValorReais,
+      });
+    }
+
+    // PagBank trabalha em CENTAVOS inteiros; o resto do sistema (produto,
+    // split.helper) trabalha em reais fracionários — a conversão é só aqui,
+    // na borda de saída para a API.
+    const valorCentavos = Math.round(valorReais * 100);
+    const splitValorCentavos = Math.round(splitValorReais * 100);
+    const valorLiquidoCentavos = valorCentavos - splitValorCentavos;
+
+    const split: SplitPedido = {
+      method: 'FIXED',
+      receivers: [
+        { accountId: envObrigatoria('PAGBANK_PLATAFORMA_ACCOUNT_ID'), valor: splitValorCentavos },
+        { accountId: contaPb!.pagbankAccountId, valor: valorLiquidoCentavos },
+      ].filter((r) => r.valor > 0),
+    };
+
+    // O PagBank exige customer.email e customer.tax_id em todo pedido. Procura
+    // nas colunas e, se vazias, nas respostas customizadas.
+    let dados = resolverDadosParticipante(participante, participante.respostasCustomizadas);
+
+    // Nem todo evento coleta e-mail/CPF (um evento pode ter só um campo de
+    // nome). Quando falta, a tela de pagamento pede na hora e manda aqui.
+    if (dados.faltando.length > 0 && (contato?.email || contato?.cpf)) {
+      const emailNovo = (contato.email ?? '').trim();
+      const cpfNovo = (contato.cpf ?? '').replace(/\D/g, '');
+
+      const erros: string[] = [];
+      if (dados.faltando.includes('email') && !emailValido(emailNovo)) erros.push('E-mail inválido.');
+      if (dados.faltando.includes('cpf') && !cpfValido(cpfNovo)) erros.push('CPF inválido.');
+
+      if (erros.length > 0) {
+        return res.status(422).json({ error: erros.join(' '), faltando: dados.faltando });
+      }
+
+      // Só PREENCHE o que está vazio, nunca sobrescreve. A rota é pública:
+      // sem esta trava, quem descobrisse o UUID de uma inscrição poderia
+      // trocar o e-mail e o CPF de outra pessoa.
+      await prisma.participantes.update({
+        where: { id: participanteId },
+        data: {
+          ...(dados.faltando.includes('email') ? { email: emailNovo } : {}),
+          ...(dados.faltando.includes('cpf') ? { cpf: cpfNovo } : {}),
+        },
+      });
+
+      dados = resolverDadosParticipante(
+        {
+          nome: dados.nome,
+          email: dados.faltando.includes('email') ? emailNovo : dados.email,
+          cpf: dados.faltando.includes('cpf') ? cpfNovo : dados.cpf,
+          telefone: dados.telefone,
+        },
+        [],
+      );
+    }
+
+    if (dados.faltando.length > 0) {
+      logPbErro('pedido.erro', {
+        instituicaoId,
+        participanteId,
+        etapa: 'dados_do_participante',
+        faltando: dados.faltando,
+      });
+
+      const rotulos = { email: 'e-mail', cpf: 'CPF' } as const;
+
+      return res.status(422).json({
+        error: `Para pagar online precisamos de ${dados.faltando.map((f) => rotulos[f]).join(' e ')}.`,
+        faltando: dados.faltando,
       });
     }
 
     const externalReference = crypto.randomUUID();
-    const expiraEm = new Date(Date.now() + VALIDADE_PREFERENCE_MS);
+    const expiraEm = new Date(Date.now() + VALIDADE_PEDIDO_MS);
+    const apiUrl = process.env.API_URL || '';
 
-    const pagamento = await prisma.mpPagamento.create({
+    const basePedido = {
+      referenceId: externalReference,
+      itemNome: produto.nome,
+      itemDescricao: produto.descricao || participante.evento?.nome || produto.nome,
+      valor: valorCentavos,
+      cliente: {
+        name: dados.nome || 'Participante',
+        email: dados.email!,
+        taxId: dados.cpf!,
+        telefone: dados.telefone ?? undefined,
+      },
+      split,
+      notificationUrl: `${apiUrl}/webhooks/pagbank?ref=${externalReference}`,
+    };
+
+    logPb('pedido.payload', {
+      instituicaoId,
+      externalReference,
+      metodoPagamento,
+      token: impressaoToken(accessToken),
+      valorItem: valorReais,
+      splitValor: splitValorReais > 0 ? splitValorReais : null,
+      notificationUrl: basePedido.notificationUrl,
+      apiHttps: apiUrl.startsWith('https://'),
+      payer: {
+        email: mascarar(dados.email),
+        temCpf: Boolean(dados.cpf),
+        cpfDigitos: dados.cpf?.length ?? 0,
+      },
+    });
+
+    // Registro local ANTES da chamada: se o PagBank cair no meio, sobra um
+    // registro CANCELED em vez de nenhum rastro da tentativa.
+    const pagamento = await prisma.pagBankPagamento.create({
       data: {
         instituicaoId,
         participanteId,
         participanteProdutoId: participanteProduto.id,
         eventoId: participante.eventoId,
         externalReference,
-        valor,
-        splitValor,
+        valor: valorReais,
+        splitValor: splitValorReais,
         splitPercentualAplicado: regra.percentual,
+        metodoPagamento,
         expiraEm,
-        status: 'PENDING',
+        status: 'WAITING',
       },
     });
-
-    const { nome: primeiroNome, sobrenome } = primeiroNomeESobrenome(participante.nome);
-    const cpfLimpo = (participante.cpf || '').replace(/\D/g, '');
-
-    const frontendUrl = process.env.FRONTEND_URL || '';
-    const apiUrl = process.env.API_URL || '';
-
-    // Tipado pelo SDK: campo inválido quebra na compilação, não no 400 do MP.
-    const preferencePayload: PreferenceRequestMp = {
-      items: [
-        {
-          id: produto.id,
-          title: produto.nome,
-          description: produto.descricao || participante.evento?.nome || produto.nome,
-          category_id: 'services',
-          quantity: 1,
-          currency_id: 'BRL',
-          unit_price: valor,
-        },
-      ],
-      payer: {
-        name: primeiroNome,
-        surname: sobrenome,
-        email: participante.email || undefined,
-        phone: participante.telefone
-          ? { number: participante.telefone.replace(/\D/g, '') }
-          : undefined,
-        identification: cpfLimpo ? { type: 'CPF', number: cpfLimpo } : undefined,
-      },
-      external_reference: externalReference,
-      // O ref na query é o que permite ao webhook descobrir a instituição: a
-      // notificação do MP só carrega data.id (o payment), e sem saber a
-      // instituição não há token para consultar esse payment.
-      notification_url: `${apiUrl}/webhooks/mercadopago?ref=${externalReference}`,
-      back_urls: {
-        success: `${frontendUrl}/inscricao/pagamento?status=sucesso`,
-        pending: `${frontendUrl}/inscricao/pagamento?status=pendente`,
-        failure: `${frontendUrl}/inscricao/pagamento?status=falha`,
-      },
-      // auto_return exige back_url.success público e https; em localhost o MP
-      // rejeita a preference inteira com "back_url.success must be defined".
-      ...(frontendUrl.startsWith('https://') ? { auto_return: 'approved' } : {}),
-      // Aparece na fatura do cartão do participante. Reduz contestação por
-      // "não reconheço a compra".
-      statement_descriptor: (instituicao.nome || 'INSCRICAO').slice(0, 22),
-      binary_mode: true,
-      expires: true,
-      expiration_date_to: expiraEm.toISOString(),
-    };
-
-    // marketplace_fee zero é omitido: mandar 0 explícito é ruído para o MP.
-    if (splitValor > 0) {
-      preferencePayload.marketplace_fee = splitValor;
-    }
-
-    logMp('preference.payload', {
-      instituicaoId,
-      mpPagamentoId: pagamento.id,
-      externalReference,
-      // Qual credencial vai assinar esta preference. Comparar com o
-      // `token.resolve` de cima e com o `oauth.exchange` da conexão.
-      token: impressaoToken(accessToken),
-      tokenPlataforma: impressaoToken(process.env.MERCADO_PAGO_ACCESS_TOKEN),
-      mpUserIdEsperado: contaMp?.mpUserId ?? null,
-      valorItem: valor,
-      marketplaceFee: splitValor > 0 ? splitValor : null,
-      binaryMode: preferencePayload.binary_mode,
-      autoReturn: preferencePayload.auto_return ?? null,
-      notificationUrl: preferencePayload.notification_url,
-      backUrls: preferencePayload.back_urls,
-      // https é pré-requisito do auto_return e do webhook; localhost aqui
-      // explica metade dos erros do checkout.
-      frontendHttps: frontendUrl.startsWith('https://'),
-      apiHttps: apiUrl.startsWith('https://'),
-      statementDescriptor: preferencePayload.statement_descriptor,
-      expiraEm: expiraEm.toISOString(),
-      payer: {
-        email: mascarar(participante.email),
-        temCpf: Boolean(cpfLimpo),
-        cpfDigitos: cpfLimpo.length,
-        temTelefone: Boolean(participante.telefone),
-      },
-    });
-
-    let preference;
 
     try {
-      // externalReference como chave de idempotência: reenvio da mesma tentativa
-      // não gera uma segunda preference no Mercado Pago.
-      preference = await chamarMp('POST /checkout/preferences', () =>
-        clientePreference(accessToken, { idempotencyKey: externalReference }).create({
-          body: preferencePayload,
-        }),
-      );
-    } catch (error: any) {
-      logMpErro('preference.erro', {
-        instituicaoId,
-        mpPagamentoId: pagamento.id,
-        externalReference,
-        etapa: 'criar_preference',
-        mensagem: String(error?.message ?? error),
-        corpo: error?.corpo ?? null,
+      if (metodoPagamento === 'CREDIT_CARD') {
+        const parcelas = Math.min(Math.max(Number(cartao?.parcelas) || 1, 1), 12);
+
+        // Formato do blob, nunca o conteúdo: um `encrypted` que não é base64
+        // ou que veio truncado é a causa mais comum de recusa no cartão, e
+        // sem isto o erro do PagBank não diz de onde veio.
+        const blob = cartao!.encrypted!;
+        logPb('pedido.payload', {
+          etapa: 'cartao_cifrado',
+          tamanho: blob.length,
+          base64Valido: /^[A-Za-z0-9+/]+=*$/.test(blob),
+          prefixo: blob.slice(0, 12),
+        });
+
+        const pedido = await criarPedidoComCartao(accessToken, {
+          ...basePedido,
+          cartao: {
+            encrypted: cartao!.encrypted!,
+            securityCode: cartao!.securityCode!,
+            parcelas,
+          },
+        });
+
+        const charge = pedido.charges?.[0];
+        const status = MAPA_STATUS[charge?.status ?? ''] ?? 'IN_ANALYSIS';
+
+        const atualizado = await prisma.pagBankPagamento.update({
+          where: { id: pagamento.id },
+          data: {
+            pagbankOrderId: pedido.id,
+            pagbankChargeId: charge?.id ?? null,
+            status,
+            statusDetail: charge?.payment_response?.message ?? null,
+            parcelasCartao: parcelas,
+            aprovadoEm: status === 'PAID' ? new Date() : null,
+          },
+        });
+
+        registrarResultado(instituicaoId, pagamento.id, pedido.id, contaPb, split);
+
+        // Cartão aprova na hora: não dá para esperar o webhook para dar baixa,
+        // senão a inscrição fica pendente na tela mesmo já paga.
+        if (status === 'PAID') {
+          await registrarBaixaPagamento(atualizado.id);
+        }
+
+        return res.status(201).json(serializarPagamento(atualizado));
+      }
+
+      if (metodoPagamento === 'PIX') {
+        const pedido = await criarPedidoComPix(accessToken, { ...basePedido, expiraEm });
+        const charge = pedido.charges?.[0];
+
+        const atualizado = await prisma.pagBankPagamento.update({
+          where: { id: pagamento.id },
+          data: {
+            pagbankOrderId: pedido.id,
+            pagbankChargeId: charge?.id ?? null,
+            status: MAPA_STATUS[charge?.status ?? ''] ?? 'WAITING',
+            qrCodeTexto: charge?.qr_code?.text ?? null,
+            qrCodeImagemUrl:
+              charge?.links?.find((l) => l.rel === 'QRCODE.BASE64')?.href ?? null,
+          },
+        });
+
+        registrarResultado(instituicaoId, pagamento.id, pedido.id, contaPb, split);
+        return res.status(201).json(serializarPagamento(atualizado));
+      }
+
+      // BOLETO
+      const vencimento = new Date(Date.now() + VALIDADE_BOLETO_DIAS * 24 * 60 * 60 * 1000);
+
+      const enderecoInstituicao = {
+        street: instituicao.endereco || 'Não informado',
+        number: 'S/N',
+        postalCode: '00000000',
+        locality: instituicao.nome,
+        city: instituicao.nome,
+        regionCode: 'SP',
+      };
+
+      const pedido = await criarPedidoComBoleto(accessToken, {
+        ...basePedido,
+        vencimento,
+        holder: {
+          name: dados.nome || 'Participante',
+          taxId: dados.cpf!,
+          email: participante.email || undefined,
+          address: enderecoInstituicao,
+        },
       });
 
-      // A preference falhou: o registro local não pode ficar como pendente
-      // válido, senão bloqueia a próxima tentativa pelo caminho de reuso.
-      await prisma.mpPagamento.update({
+      const charge = pedido.charges?.[0];
+
+      const atualizado = await prisma.pagBankPagamento.update({
         where: { id: pagamento.id },
-        data: { status: 'CANCELLED', statusDetail: 'falha_ao_criar_preference' },
+        data: {
+          pagbankOrderId: pedido.id,
+          pagbankChargeId: charge?.id ?? null,
+          status: MAPA_STATUS[charge?.status ?? ''] ?? 'WAITING',
+          boletoUrl: charge?.links?.find((l) => l.rel === 'SELF')?.href ?? null,
+          expiraEm: vencimento,
+        },
       });
+
+      registrarResultado(instituicaoId, pagamento.id, pedido.id, contaPb, split);
+      return res.status(201).json(serializarPagamento(atualizado));
+    } catch (error: any) {
+      logPbErro('pedido.erro', {
+        instituicaoId,
+        pagamentoId: pagamento.id,
+        externalReference,
+        etapa: 'criar_pedido',
+        mensagem: String(error?.message ?? error),
+        corpo: error instanceof PagBankError ? error.corpo : null,
+      });
+
+      await prisma.pagBankPagamento.update({
+        where: { id: pagamento.id },
+        data: { status: 'CANCELED', statusDetail: 'falha_ao_criar_pedido' },
+      });
+
       throw error;
     }
-
-    const collectorId =
-      (preference as { collector_id?: unknown }).collector_id !== undefined
-        ? String((preference as { collector_id?: unknown }).collector_id)
-        : null;
-
-    logMp('preference.ok', {
-      instituicaoId,
-      mpPagamentoId: pagamento.id,
-      preferenceId: preference.id ?? null,
-      externalReference,
-      // A prova final de que a preference saiu na conta da igreja: o
-      // collector_id devolvido pelo MP é o dono do access_token usado.
-      collectorId,
-      mpUserIdGravado: contaMp?.mpUserId ?? null,
-      collectorConfere: Boolean(
-        collectorId && contaMp?.mpUserId && collectorId === contaMp.mpUserId,
-      ),
-      clientId: (preference as { client_id?: unknown }).client_id ?? null,
-      appIdConfigurado: process.env.MERCADO_PAGO_APP_ID ?? null,
-      marketplaceFeeAceito:
-        (preference as { marketplace_fee?: unknown }).marketplace_fee ?? null,
-      temInitPoint: Boolean(preference.init_point),
-      // sandbox_init_point só existe/funciona com credencial de TESTE. Com
-      // token APP_USR de test user o pagamento roda em modo produtivo.
-      temSandboxInitPoint: Boolean(
-        (preference as { sandbox_init_point?: unknown }).sandbox_init_point,
-      ),
-    });
-
-    if (collectorId && contaMp?.mpUserId && collectorId !== contaMp.mpUserId) {
-      logMpErro('preference.alerta', {
-        instituicaoId,
-        alerta: 'collector_divergente',
-        collectorId,
-        mpUserIdGravado: contaMp.mpUserId,
-        detalhe: 'a preference nasceu em uma conta MP diferente da conectada',
-      });
-    }
-
-    if (!preference.init_point) {
-      await prisma.mpPagamento.update({
-        where: { id: pagamento.id },
-        data: { status: 'CANCELLED', statusDetail: 'preference_sem_init_point' },
-      });
-      return res.status(502).json({ error: 'Mercado Pago não devolveu link de pagamento' });
-    }
-
-    const atualizado = await prisma.mpPagamento.update({
-      where: { id: pagamento.id },
-      data: {
-        mpPreferenceId: preference.id ?? null,
-        initPoint: preference.init_point,
-      },
-    });
-
-    return res.status(201).json({
-      init_point: atualizado.initPoint,
-      mpPagamentoId: atualizado.id,
-      valor,
-      splitValor,
-    });
   } catch (error: any) {
-    console.error('Erro ao criar preference de checkout:', error?.message ?? error);
+    console.error('Erro ao criar pedido de checkout:', error?.message ?? error);
+
+    // Erro 4xx do PagBank é falha do dado enviado (cartão recusado, cifra
+    // inválida, split incoerente) — devolver "erro ao criar cobrança" genérico
+    // deixa o participante sem saber o que corrigir e nós sem diagnóstico.
+    // 5xx e falha de rede continuam genéricos: aí o problema não é do usuário.
+    if (error instanceof PagBankError && error.status && error.status >= 400 && error.status < 500) {
+      const detalhes = Array.isArray((error.corpo as any)?.error_messages)
+        ? ((error.corpo as any).error_messages as Array<Record<string, unknown>>).map((m) => ({
+            codigo: m.error ?? m.code ?? null,
+            campo: m.parameter_name ?? null,
+          }))
+        : [];
+
+      return res.status(422).json({
+        error: 'O PagBank recusou a cobrança.',
+        detalhes,
+      });
+    }
+
     return res.status(500).json({ error: 'Erro ao criar cobrança' });
+  }
+});
+
+function registrarResultado(
+  instituicaoId: string,
+  pagamentoId: string,
+  pagbankOrderId: string,
+  contaPb: { pagbankAccountId: string } | null,
+  split: SplitPedido,
+) {
+  logPb('pedido.ok', {
+    instituicaoId,
+    pagamentoId,
+    pagbankOrderId,
+    receiverPlataforma: split.receivers.find((r) => r.accountId !== contaPb?.pagbankAccountId)
+      ?.accountId,
+    receiverInstituicao: contaPb?.pagbankAccountId ?? null,
+  });
+}
+
+function serializarPagamento(p: {
+  id: string;
+  status: string;
+  metodoPagamento: string | null;
+  valor: unknown;
+  qrCodeTexto: string | null;
+  qrCodeImagemUrl: string | null;
+  boletoUrl: string | null;
+  expiraEm: Date | null;
+}) {
+  return {
+    pagamentoId: p.id,
+    status: p.status,
+    metodoPagamento: p.metodoPagamento,
+    valor: Number(p.valor),
+    qrCodeTexto: p.qrCodeTexto,
+    qrCodeImagemUrl: p.qrCodeImagemUrl,
+    boletoUrl: p.boletoUrl,
+    expiraEm: p.expiraEm,
+  };
+}
+
+/**
+ * GET /checkout/pedidos/:id - rota PÚBLICA de polling.
+ *
+ * Não há redirect do PagBank de volta para o front (diferente do Mercado
+ * Pago): a tela de pagamento consulta este endpoint para saber quando o PIX
+ * foi pago ou o cartão foi aprovado. O id é um UUID não sequencial — não
+ * exige dono autenticado, mesma premissa pública do POST.
+ */
+router.get('/pedidos/:id', async (req: Request, res: Response) => {
+  try {
+    const pagamento = await prisma.pagBankPagamento.findUnique({
+      where: { id: String(req.params.id) },
+    });
+
+    if (!pagamento) {
+      return res.status(404).json({ error: 'Pedido não encontrado' });
+    }
+
+    // Confere a fonte antes de responder: o Pix pode ter sido pago sem que o
+    // webhook chegasse. Sem isto a tela ficaria em "aguardando" para sempre.
+    const atual = await sincronizarPagamento(pagamento);
+
+    return res.status(200).json(serializarPagamento(atual));
+  } catch (error) {
+    console.error('Erro ao consultar pedido de checkout:', error);
+    return res.status(500).json({ error: 'Erro ao consultar pedido' });
   }
 });
 
