@@ -3,7 +3,7 @@
  * pagamento (split). É o substituto direto do `Preference` do Mercado Pago —
  * mas ao contrário do MP, o PagBank NÃO aceita split no checkout hospedado
  * (`/checkouts`): split só existe em `/orders`. Por isso a tela de pagamento
- * do participante é NOSSA (PIX/boleto/cartão), não um redirect para o
+ * do participante é NOSSA (PIX/cartão), não um redirect para o
  * PagBank — ver docs/pagbank-implementacao.md.
  *
  * PCI: esta plataforma não é certificada PCI-DSS. Cartão SEMPRE chega aqui já
@@ -167,69 +167,6 @@ export async function criarPedidoComPix(
   };
 
   return requestPb<PedidoPagBank>('POST /orders (pix)', {
-    method: 'POST',
-    baseUrl: baseUrlOrders(),
-    path: '/orders',
-    accessToken,
-    idempotencyKey: pedido.referenceId,
-    body,
-  });
-}
-
-export interface BoletoHolder {
-  name: string;
-  taxId: string;
-  email?: string;
-  address: {
-    street: string;
-    number: string;
-    postalCode: string;
-    locality: string;
-    city: string;
-    regionCode: string;
-  };
-}
-
-export async function criarPedidoComBoleto(
-  accessToken: string,
-  pedido: BasePedido & { vencimento: Date; holder: BoletoHolder },
-): Promise<PedidoPagBank> {
-  const body = {
-    ...montarBase(pedido),
-    charges: [
-      {
-        reference_id: pedido.referenceId,
-        description: pedido.itemDescricao || pedido.itemNome,
-        amount: { value: pedido.valor, currency: 'BRL' },
-        payment_method: {
-          type: 'BOLETO',
-          boleto: {
-            due_date: pedido.vencimento.toISOString().slice(0, 10),
-            holder: {
-              name: pedido.holder.name,
-              tax_id: pedido.holder.taxId.replace(/\D/g, ''),
-              email: pedido.holder.email,
-              address: {
-                street: pedido.holder.address.street,
-                number: pedido.holder.address.number,
-                postal_code: pedido.holder.address.postalCode.replace(/\D/g, ''),
-                locality: pedido.holder.address.locality,
-                city: pedido.holder.address.city,
-                region_code: pedido.holder.address.regionCode,
-                country: 'Brasil',
-              },
-            },
-            instruction_lines: {
-              line_1: 'Pagamento até a data de vencimento',
-            },
-          },
-        },
-        splits: montarSplit(pedido.split),
-      },
-    ],
-  };
-
-  return requestPb<PedidoPagBank>('POST /orders (boleto)', {
     method: 'POST',
     baseUrl: baseUrlOrders(),
     path: '/orders',

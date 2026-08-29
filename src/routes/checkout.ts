@@ -6,7 +6,6 @@ import { PagBankError } from '../lib/pagbank/client.js';
 import {
   criarPedidoComCartao,
   criarPedidoComPix,
-  criarPedidoComBoleto,
   obterChavePublicaOrders,
   type SplitPedido,
 } from '../lib/pagbank/orders.js';
@@ -29,9 +28,8 @@ const router = Router();
 
 /** Validade do PIX e do pedido pendente antes de permitir gerar outro. */
 const VALIDADE_PEDIDO_MS = 60 * 60 * 1000; // 1h
-const VALIDADE_BOLETO_DIAS = 3;
 
-type MetodoPagamento = 'PIX' | 'BOLETO' | 'CREDIT_CARD';
+type MetodoPagamento = 'PIX' | 'CREDIT_CARD';
 
 /** Mapeia o status inicial do charge devolvido pelo PagBank para o nosso enum. */
 const MAPA_STATUS: Record<string, PagBankPagamentoStatus> = {
@@ -148,7 +146,7 @@ router.get('/resumo', async (req: Request, res: Response) => {
  *
  * Diferente do antigo fluxo Mercado Pago (preference + redirect), o PagBank
  * não aceita split no checkout hospedado — só em /orders. Por isso esta rota
- * cria o pedido diretamente (PIX/boleto/cartão) e devolve os dados para a
+ * cria o pedido diretamente (PIX/cartão) e devolve os dados para a
  * NOSSA tela de pagamento (/inscricao/pagamento) exibir, em vez de devolver
  * um link de redirect.
  */
@@ -167,8 +165,8 @@ router.post('/pedidos', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'participanteId e produtoId são obrigatórios' });
     }
 
-    if (!metodoPagamento || !['PIX', 'BOLETO', 'CREDIT_CARD'].includes(metodoPagamento)) {
-      return res.status(400).json({ error: 'metodoPagamento inválido (PIX, BOLETO ou CREDIT_CARD)' });
+    if (!metodoPagamento || !['PIX', 'CREDIT_CARD'].includes(metodoPagamento)) {
+      return res.status(400).json({ error: 'metodoPagamento inválido (PIX ou CREDIT_CARD)' });
     }
 
     if (metodoPagamento === 'CREDIT_CARD' && (!cartao?.encrypted || !cartao?.securityCode)) {
@@ -230,7 +228,7 @@ router.post('/pedidos', async (req: Request, res: Response) => {
     }
 
     // Pedido pendente do MESMO método ainda válido: devolve o mesmo em vez de
-    // criar outro (evita QR/boleto duplicado a cada F5 da tela de pagamento).
+    // criar outro (evita QR duplicado a cada F5 da tela de pagamento).
     const pendente = await prisma.pagBankPagamento.findFirst({
       where: {
         participanteProdutoId: participanteProduto.id,
@@ -485,49 +483,7 @@ router.post('/pedidos', async (req: Request, res: Response) => {
         return res.status(201).json(serializarPagamento(atualizado));
       }
 
-      if (metodoPagamento === 'PIX') {
-        const pedido = await criarPedidoComPix(accessToken, { ...basePedido, expiraEm });
-        const charge = pedido.charges?.[0];
-
-        const atualizado = await prisma.pagBankPagamento.update({
-          where: { id: pagamento.id },
-          data: {
-            pagbankOrderId: pedido.id,
-            pagbankChargeId: charge?.id ?? null,
-            status: MAPA_STATUS[charge?.status ?? ''] ?? 'WAITING',
-            qrCodeTexto: charge?.qr_code?.text ?? null,
-            qrCodeImagemUrl:
-              charge?.links?.find((l) => l.rel === 'QRCODE.BASE64')?.href ?? null,
-          },
-        });
-
-        registrarResultado(instituicaoId, pagamento.id, pedido.id, contaPb, split);
-        return res.status(201).json(serializarPagamento(atualizado));
-      }
-
-      // BOLETO
-      const vencimento = new Date(Date.now() + VALIDADE_BOLETO_DIAS * 24 * 60 * 60 * 1000);
-
-      const enderecoInstituicao = {
-        street: instituicao.endereco || 'Não informado',
-        number: 'S/N',
-        postalCode: '00000000',
-        locality: instituicao.nome,
-        city: instituicao.nome,
-        regionCode: 'SP',
-      };
-
-      const pedido = await criarPedidoComBoleto(accessToken, {
-        ...basePedido,
-        vencimento,
-        holder: {
-          name: dados.nome || 'Participante',
-          taxId: dados.cpf!,
-          email: participante.email || undefined,
-          address: enderecoInstituicao,
-        },
-      });
-
+      const pedido = await criarPedidoComPix(accessToken, { ...basePedido, expiraEm });
       const charge = pedido.charges?.[0];
 
       const atualizado = await prisma.pagBankPagamento.update({
@@ -536,8 +492,9 @@ router.post('/pedidos', async (req: Request, res: Response) => {
           pagbankOrderId: pedido.id,
           pagbankChargeId: charge?.id ?? null,
           status: MAPA_STATUS[charge?.status ?? ''] ?? 'WAITING',
-          boletoUrl: charge?.links?.find((l) => l.rel === 'SELF')?.href ?? null,
-          expiraEm: vencimento,
+          qrCodeTexto: charge?.qr_code?.text ?? null,
+          qrCodeImagemUrl:
+            charge?.links?.find((l) => l.rel === 'QRCODE.BASE64')?.href ?? null,
         },
       });
 
