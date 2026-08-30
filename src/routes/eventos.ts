@@ -239,7 +239,10 @@ router.get('/:id', async (req, res) => {
             oculto: true
           }
         },
-        camposCustomizados: { orderBy: { ordem: 'asc' } }
+        camposCustomizados: { orderBy: { ordem: 'asc' } },
+        _count: {
+          select: { participantes: { where: { isDeleted: false } } }
+        }
       }
     });
 
@@ -252,6 +255,7 @@ router.get('/:id', async (req, res) => {
     const eventoFormatado = {
       ...evento,
       camposCustomizados: undefined,
+      _count: undefined,
       data_inicio: formatDateToBrasilia(evento.data_inicio),
       data_fim: formatDateToBrasilia(evento.data_fim),
       createdAt: formatDateToBrasilia(evento.createdAt),
@@ -260,7 +264,8 @@ router.get('/:id', async (req, res) => {
         ...produto,
         valor: parseFloat(produto.valor.toString())
       })),
-      campos_customizados: serializarCamposCustomizados(evento.camposCustomizados)
+      campos_customizados: serializarCamposCustomizados(evento.camposCustomizados),
+      quantidadeParticipantes: evento._count?.participantes ?? 0
     };
 
     res.json(eventoFormatado);

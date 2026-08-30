@@ -33,7 +33,7 @@ app.set('trust proxy', 1);
 app.use(
   cors({
     origin: [
-      'http://localhost:4001',
+      'http://localhost:3001',
       'https://app.igrejaformosadecristo.com',
     ],
     credentials: true,
