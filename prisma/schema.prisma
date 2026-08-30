@@ -124,7 +124,8 @@ model Eventos {
   imagem_url            String?
   instituicaoId         String?
   limite_inscricoes     Int?
-  statusId              String?            @unique
+  statusId              String?
+  justificativa         String?
   selecao_unica_produto Boolean            @default(true)
   enviar_email_qr_code  Boolean            @default(false)
   user                  Users?             @relation(fields: [userId], references: [id])
@@ -176,10 +177,9 @@ model RespostaCustomizada {
 }
 
 model StatusEvento {
-  id            String   @id @default(uuid())
-  nome          String
-  justificativa String?
-  evento        Eventos?
+  id     String    @id @default(uuid())
+  nome   String    @unique
+  eventos Eventos[]
 
   @@map("status_eventos")
 }

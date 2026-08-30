@@ -33,6 +33,7 @@ function serializarEvento(evento: any) {
   const quantidadeParticipantes = evento?._count?.participantes ?? 0;
   const statusAtual = serializarStatusEvento({
     status: evento?.status,
+    justificativa: evento?.justificativa,
     data_maxima_inscricao: evento?.data_maxima_inscricao,
     limite_inscricoes: evento?.limite_inscricoes,
     quantidadeParticipantes,
@@ -99,6 +100,12 @@ router.post('/', async (req, res) => {
       });
     }
 
+    const statusAberto = await db.statusEvento.findUnique({ where: { nome: 'aberto' } });
+
+    if (!statusAberto) {
+      return res.status(500).json({ error: 'Status "aberto" não encontrado na tabela de status' });
+    }
+
     const evento = await db.eventos.create({
       data: {
         nome,
@@ -115,11 +122,9 @@ router.post('/', async (req, res) => {
           connect: { id: instituicaoId }
         } : undefined,
         status: {
-          create: {
-            nome: 'aberto',
-            justificativa: null,
-          }
+          connect: { id: statusAberto.id }
         },
+        justificativa: null,
         produtos: produtos ? {
           create: produtos.map((produto: any) => ({
             nome: produto.nome,
@@ -290,6 +295,7 @@ router.put('/:id', async (req, res) => {
     const eventoAtualizado = await db.$transaction(async (prismaTransaction: any) => {
       const tx = prismaTransaction as any;
       let statusId = evento.statusId;
+      const justificativa = statusJustificativa !== undefined ? (statusJustificativa || null) : evento.justificativa;
 
       if (statusNome !== undefined) {
         const nomeNormalizado = String(statusNome).trim().toLowerCase();
@@ -298,24 +304,13 @@ router.put('/:id', async (req, res) => {
           throw new Error('Status inválido para atualização manual do evento');
         }
 
-        if (evento.statusId) {
-          await tx.statusEvento.update({
-            where: { id: evento.statusId },
-            data: {
-              nome: nomeNormalizado,
-              justificativa: statusJustificativa !== undefined ? (statusJustificativa || null) : evento.status?.justificativa || null,
-            }
-          });
-        } else {
-          const novoStatus = await tx.statusEvento.create({
-            data: {
-              nome: nomeNormalizado,
-              justificativa: statusJustificativa !== undefined ? (statusJustificativa || null) : null,
-            }
-          });
+        const statusAlvo = await tx.statusEvento.findUnique({ where: { nome: nomeNormalizado } });
 
-          statusId = novoStatus.id;
+        if (!statusAlvo) {
+          throw new Error(`Status "${nomeNormalizado}" não encontrado na tabela de status`);
         }
+
+        statusId = statusAlvo.id;
       }
 
       // 1. Atualizar o evento em si
@@ -332,6 +327,7 @@ router.put('/:id', async (req, res) => {
           imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
           limite_inscricoes: limiteInscricoes !== undefined ? (Number.isNaN(limiteInscricoes) ? null : limiteInscricoes) : evento.limite_inscricoes,
           statusId,
+          justificativa,
           updatedByEmail: req.body.updatedByEmail || null,
         }
       });
@@ -570,6 +566,7 @@ router.post('/:eventoId/participantes', async (req, res) => {
 
     const statusAtual = serializarStatusEvento({
       status: evento.status,
+      justificativa: evento.justificativa,
       data_maxima_inscricao: evento.data_maxima_inscricao,
       limite_inscricoes: evento.limite_inscricoes,
       quantidadeParticipantes: evento._count.participantes,
