@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../lib/prisma/client.js';
-import { decryptToken, encryptToken } from '../lib/mercadopago/crypto.js';
-import { refreshAccessToken } from '../lib/mercadopago/oauth.js';
+import { decryptToken, encryptToken } from '../lib/pagbank/crypto.js';
+import { refreshAccessToken } from '../lib/pagbank/oauth.js';
 
 const router = Router();
 
@@ -19,13 +19,12 @@ function autorizado(req: Request): boolean {
 }
 
 /**
- * POST /jobs/refresh-mp-tokens
+ * POST /jobs/refresh-pagbank-tokens
  *
- * O refresh_token do Mercado Pago vale 6 meses; o access_token, bem menos.
- * Sem este job, uma instituição que fica sem transacionar por um tempo teria o
- * primeiro checkout do período falhando.
+ * Sem este job, uma instituição que fica sem transacionar por um tempo teria
+ * o primeiro checkout do período falhando com token vencido.
  */
-router.post('/refresh-mp-tokens', async (req: Request, res: Response) => {
+router.post('/refresh-pagbank-tokens', async (req: Request, res: Response) => {
   if (!autorizado(req)) {
     return res.status(401).json({ error: 'Não autorizado' });
   }
@@ -33,7 +32,7 @@ router.post('/refresh-mp-tokens', async (req: Request, res: Response) => {
   const limite = new Date(Date.now() + JANELA_RENOVACAO_MS);
 
   try {
-    const contas = await prisma.mercadoPagoAccount.findMany({
+    const contas = await prisma.pagBankAccount.findMany({
       where: { status: 'ACTIVE', expiresAt: { lt: limite } },
     });
 
@@ -44,13 +43,12 @@ router.post('/refresh-mp-tokens', async (req: Request, res: Response) => {
       try {
         const tokens = await refreshAccessToken(decryptToken(conta.refreshTokenEnc));
 
-        await prisma.mercadoPagoAccount.update({
+        await prisma.pagBankAccount.update({
           where: { id: conta.id },
           data: {
             accessTokenEnc: encryptToken(tokens.accessToken),
             refreshTokenEnc: encryptToken(tokens.refreshToken),
             expiresAt: tokens.expiresAt,
-            refreshExpiresAt: tokens.refreshExpiresAt,
             ultimoRefreshEm: new Date(),
             ultimoErro: null,
           },
@@ -60,7 +58,7 @@ router.post('/refresh-mp-tokens', async (req: Request, res: Response) => {
       } catch (error: any) {
         falhas++;
 
-        await prisma.mercadoPagoAccount.update({
+        await prisma.pagBankAccount.update({
           where: { id: conta.id },
           data: {
             status: 'EXPIRED',
@@ -75,7 +73,7 @@ router.post('/refresh-mp-tokens', async (req: Request, res: Response) => {
       }
     }
 
-    // Aproveita para limpar nonces vencidos.
+    // Aproveita para limpar states OAuth vencidos.
     const nonces = await prisma.oAuthNonce.deleteMany({
       where: { expiraEm: { lt: new Date() } },
     });

@@ -93,7 +93,7 @@ router.get('/stats', authenticateUser, async (req: AuthRequest, res: Response) =
           data_fim: true,
           data_maxima_inscricao: true,
           limite_inscricoes: true,
-          status: { select: { id: true, nome: true, justificativa: true } },
+          status: { select: { id: true, nome: true } },
           _count: { select: { participantes: { where: { isDeleted: false } } } },
         },
         orderBy: { data_inicio: 'desc' },

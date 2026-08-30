@@ -18,11 +18,11 @@ let chaveCache: Buffer | null = null;
 function getChave(): Buffer {
   if (chaveCache) return chaveCache;
 
-  const bruta = process.env.MP_TOKEN_ENCRYPTION_KEY;
+  const bruta = process.env.PAGBANK_TOKEN_ENCRYPTION_KEY;
 
   if (!bruta) {
     throw new Error(
-      'MP_TOKEN_ENCRYPTION_KEY não configurada. Gere com: openssl rand -base64 32',
+      'PAGBANK_TOKEN_ENCRYPTION_KEY não configurada. Gere com: openssl rand -base64 32',
     );
   }
 
@@ -30,7 +30,7 @@ function getChave(): Buffer {
 
   if (chave.length !== CHAVE_BYTES) {
     throw new Error(
-      `MP_TOKEN_ENCRYPTION_KEY inválida: esperados ${CHAVE_BYTES} bytes em base64, recebidos ${chave.length}. Gere com: openssl rand -base64 32`,
+      `PAGBANK_TOKEN_ENCRYPTION_KEY inválida: esperados ${CHAVE_BYTES} bytes em base64, recebidos ${chave.length}. Gere com: openssl rand -base64 32`,
     );
   }
 

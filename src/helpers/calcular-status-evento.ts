@@ -7,7 +7,8 @@ export interface StatusEventoRegistro {
 }
 
 interface EventoStatusInput {
-  status?: StatusEventoRegistro | null;
+  status?: { id: string; nome: string } | null;
+  justificativa?: string | null;
   data_maxima_inscricao?: Date | string | null;
   limite_inscricoes?: number | null;
   quantidadeParticipantes?: number | null;
@@ -100,7 +101,7 @@ export const serializarStatusEvento = (evento: EventoStatusInput): StatusEventoR
     return {
       id: evento.status?.id ?? '',
       nome: 'pausado',
-      justificativa: evento.status?.justificativa?.trim() || DEFAULT_PAUSA_JUSTIFICATIVA,
+      justificativa: evento.justificativa?.trim() || DEFAULT_PAUSA_JUSTIFICATIVA,
     };
   }
 
@@ -108,7 +109,7 @@ export const serializarStatusEvento = (evento: EventoStatusInput): StatusEventoR
     return {
       id: evento.status?.id ?? '',
       nome: 'cancelado',
-      justificativa: evento.status?.justificativa?.trim() || DEFAULT_CANCELAMENTO_JUSTIFICATIVA,
+      justificativa: evento.justificativa?.trim() || DEFAULT_CANCELAMENTO_JUSTIFICATIVA,
     };
   }
 
@@ -123,7 +124,7 @@ export const serializarStatusEvento = (evento: EventoStatusInput): StatusEventoR
   return {
     id: evento.status?.id ?? '',
     nome: 'aberto',
-    justificativa: evento.status?.justificativa?.trim() || null,
+    justificativa: evento.justificativa?.trim() || null,
   };
 };
 

@@ -10,5 +10,11 @@
       "src": "/(.*)",
       "dest": "src/server.ts"
     }
+  ],
+  "crons": [
+    {
+      "path": "/jobs/refresh-pagbank-tokens",
+      "schedule": "0 3 * * *"
+    }
   ]
 }
