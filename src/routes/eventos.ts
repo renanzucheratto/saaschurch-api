@@ -76,6 +76,62 @@ function serializarCamposCustomizados(campos: any): any[] {
   }));
 }
 
+// Erro de payload inválido: vira 400 no handler, não 500.
+class PayloadInvalidoError extends Error {
+  readonly isPayloadInvalido = true;
+}
+
+// Templates de layout aceitos para o formulário público de inscrição.
+const TEMPLATES_FORMULARIO = ['padrao', 'empilhado'];
+
+// Tipos de campo que exigem uma lista de opcoes preenchida.
+const TIPOS_COM_OPCOES = ['radio', 'checkbox', 'select'];
+
+function normalizarTemplateFormulario(valor: any, fallback = 'padrao'): string {
+  if (valor === undefined || valor === null || valor === '') return fallback;
+
+  const normalizado = String(valor).trim().toLowerCase();
+
+  if (!TEMPLATES_FORMULARIO.includes(normalizado)) {
+    throw new PayloadInvalidoError(`template_formulario inválido. Use: ${TEMPLATES_FORMULARIO.join(', ')}`);
+  }
+
+  return normalizado;
+}
+
+// Regras de campo customizado aplicadas na criação e na edição:
+// - obrigatório nunca fica oculto (o inscrito precisa conseguir responder);
+// - tipos com opcoes exigem no mínimo 2 opcoes preenchidas e sem repetição.
+function normalizarCampoCustomizado(campo: any, index: number) {
+  const tipo = campo.tipo || 'texto';
+  const obrigatorio = campo.obrigatorio !== undefined ? Boolean(campo.obrigatorio) : false;
+  const label = typeof campo.label === 'string' ? campo.label.trim() : campo.label;
+  let opcoes: string[] | null = null;
+
+  if (TIPOS_COM_OPCOES.includes(tipo)) {
+    const recebidas = Array.isArray(campo.opcoes) ? campo.opcoes : [];
+    opcoes = recebidas.map((o: any) => String(o ?? '').trim()).filter((o: string) => o.length > 0);
+
+    if (opcoes.length < 2) {
+      throw new PayloadInvalidoError(`O campo "${label || `#${index + 1}`}" precisa de pelo menos 2 opções.`);
+    }
+
+    const unicas = new Set(opcoes.map((o) => o.toLowerCase()));
+    if (unicas.size !== opcoes.length) {
+      throw new PayloadInvalidoError(`O campo "${label || `#${index + 1}`}" tem opções repetidas.`);
+    }
+  }
+
+  return {
+    label,
+    tipo,
+    obrigatorio,
+    oculto: obrigatorio ? false : (campo.oculto !== undefined ? Boolean(campo.oculto) : false),
+    opcoes,
+    ordem: campo.ordem !== undefined ? campo.ordem : index,
+  };
+}
+
 function serializarRespostasCustomizadas(respostas: any): any[] {
   if (!Array.isArray(respostas)) return [];
   return respostas.map((resposta: any) => ({
@@ -89,6 +145,7 @@ function serializarRespostasCustomizadas(respostas: any): any[] {
 router.post('/', async (req, res) => {
   try {
     const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, instituicaoId, campos_customizados, enviar_email_qr_code, faq } = req.body;
+    const templateFormulario = normalizarTemplateFormulario(req.body.template_formulario);
     const dataMaximaInscricao = req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null;
     const limiteInscricoes = req.body.limite_inscricoes !== undefined && req.body.limite_inscricoes !== ''
       ? Number(req.body.limite_inscricoes)
@@ -116,6 +173,7 @@ router.post('/', async (req, res) => {
         faq: faq || null,
         selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : true,
         enviar_email_qr_code: enviar_email_qr_code !== undefined ? Boolean(enviar_email_qr_code) : false,
+        template_formulario: templateFormulario,
         imagem_url: imagem_url || null,
         limite_inscricoes: Number.isNaN(limiteInscricoes as number) ? null : limiteInscricoes,
         instituicao: instituicaoId ? {
@@ -138,14 +196,7 @@ router.post('/', async (req, res) => {
           }))
         } : undefined,
         camposCustomizados: Array.isArray(campos_customizados) && campos_customizados.length > 0 ? {
-          create: campos_customizados.map((campo: any, index: number) => ({
-            label: campo.label,
-            tipo: campo.tipo || 'texto',
-            obrigatorio: campo.obrigatorio !== undefined ? campo.obrigatorio : false,
-            oculto: campo.oculto !== undefined ? campo.oculto : false,
-            opcoes: campo.opcoes ?? null,
-            ordem: campo.ordem !== undefined ? campo.ordem : index,
-          }))
+          create: campos_customizados.map(normalizarCampoCustomizado)
         } : undefined
       },
       include: {
@@ -160,6 +211,11 @@ router.post('/', async (req, res) => {
     res.status(201).json(eventoFormatado);
   } catch (error: any) {
     console.error('Erro ao criar evento:', error);
+
+    if (error?.isPayloadInvalido) {
+      return res.status(400).json({ error: error.message });
+    }
+
     res.status(500).json({
       error: 'Erro interno do servidor',
       details: error?.message,
@@ -280,6 +336,9 @@ router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { nome, data_inicio, data_fim, descricao, selecao_unica_produto, imagem_url, produtos, statusNome, statusJustificativa, campos_customizados, faq } = req.body;
+    const templateFormulario = req.body.template_formulario !== undefined
+      ? normalizarTemplateFormulario(req.body.template_formulario)
+      : undefined;
     const dataMaximaInscricao = req.body.data_maxima_inscricao !== undefined
       ? (req.body.data_maxima_inscricao ? new Date(req.body.data_maxima_inscricao) : null)
       : undefined;
@@ -329,6 +388,7 @@ router.put('/:id', async (req, res) => {
           descricao: descricao !== undefined ? (descricao || null) : evento.descricao,
           faq: faq !== undefined ? (faq || null) : evento.faq,
           selecao_unica_produto: selecao_unica_produto !== undefined ? selecao_unica_produto : evento.selecao_unica_produto,
+          template_formulario: templateFormulario !== undefined ? templateFormulario : evento.template_formulario,
           imagem_url: imagem_url !== undefined ? (imagem_url || null) : evento.imagem_url,
           limite_inscricoes: limiteInscricoes !== undefined ? (Number.isNaN(limiteInscricoes) ? null : limiteInscricoes) : evento.limite_inscricoes,
           statusId,
@@ -424,29 +484,16 @@ router.put('/:id', async (req, res) => {
         for (let index = 0; index < campos_customizados.length; index++) {
           const c = campos_customizados[index];
 
+          const campoNormalizado = normalizarCampoCustomizado(c, index);
+
           if (c.id) {
             await tx.campoCustomizado.update({
               where: { id: c.id },
-              data: {
-                label: c.label,
-                tipo: c.tipo || 'texto',
-                obrigatorio: c.obrigatorio !== undefined ? c.obrigatorio : false,
-                oculto: c.oculto !== undefined ? c.oculto : false,
-                opcoes: c.opcoes ?? null,
-                ordem: index,
-              }
+              data: campoNormalizado,
             });
           } else {
             await tx.campoCustomizado.create({
-              data: {
-                eventoId: id,
-                label: c.label,
-                tipo: c.tipo || 'texto',
-                obrigatorio: c.obrigatorio !== undefined ? c.obrigatorio : false,
-                oculto: c.oculto !== undefined ? c.oculto : false,
-                opcoes: c.opcoes ?? null,
-                ordem: index,
-              }
+              data: { eventoId: id, ...campoNormalizado },
             });
           }
         }
@@ -471,7 +518,8 @@ router.put('/:id', async (req, res) => {
     res.json(eventoFormatado);
   } catch (error: any) {
     console.error('Erro ao editar evento:', error);
-    const isValidationError = error?.message?.includes('Não é possível excluir o produto')
+    const isValidationError = error?.isPayloadInvalido
+      || error?.message?.includes('Não é possível excluir o produto')
       || error?.message?.includes('não pode ser excluído');
     res.status(isValidationError ? 400 : 500).json({
       error: isValidationError ? error.message : 'Erro interno do servidor',
@@ -564,6 +612,22 @@ router.post('/:eventoId/participantes', async (req, res) => {
             if (clean.length < 10 || clean.length > 11) {
               return res.status(400).json({ error: `"${campo.label}" deve ser um telefone válido.` });
             }
+          }
+        }
+
+        // Campos com opcoes só aceitam valores que existem na lista cadastrada.
+        if (TIPOS_COM_OPCOES.includes(campo.tipo)) {
+          const opcoes = Array.isArray(campo.opcoes) ? campo.opcoes.map((o: any) => String(o)) : [];
+
+          if (campo.tipo === 'checkbox') {
+            const marcadas = Array.isArray(resposta?.valores) ? resposta.valores.map((v: any) => String(v)) : [];
+            const invalida = marcadas.find((v: string) => !opcoes.includes(v));
+
+            if (invalida !== undefined) {
+              return res.status(400).json({ error: `"${invalida}" não é uma opção válida para "${campo.label}".` });
+            }
+          } else if (valorStr && !opcoes.includes(valorStr)) {
+            return res.status(400).json({ error: `"${valorStr}" não é uma opção válida para "${campo.label}".` });
           }
         }
       }

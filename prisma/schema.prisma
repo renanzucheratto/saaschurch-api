@@ -191,6 +191,7 @@ model Eventos {
   justificativa         String?
   selecao_unica_produto Boolean            @default(true)
   enviar_email_qr_code  Boolean            @default(false)
+  template_formulario   String             @default("padrao")
   user                  Users?             @relation(fields: [userId], references: [id])
   instituicao           Instituicao?       @relation(fields: [instituicaoId], references: [id], onDelete: Cascade)
   status                StatusEvento?      @relation(fields: [statusId], references: [id], onDelete: SetNull)
