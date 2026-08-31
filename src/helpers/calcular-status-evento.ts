@@ -19,6 +19,13 @@ const DEFAULT_PAUSA_JUSTIFICATIVA = 'Este evento está pausado temporariamente.'
 const DEFAULT_CANCELAMENTO_JUSTIFICATIVA = 'Este evento foi cancelado.';
 const DEFAULT_FINALIZADO_JUSTIFICATIVA = 'As inscrições para este evento foram encerradas.';
 
+// O banco grava as datas de evento como horário de Brasília rotulado como UTC
+// (ver formatDateToBrasilia em routes/eventos.ts). Para comparar com essas datas
+// precisamos de um "agora" no mesmo referencial, senão o corte acontece 3h cedo.
+const BRASILIA_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+const agoraNoReferencialDoBanco = () => new Date(Date.now() - BRASILIA_OFFSET_MS);
+
 const parseDate = (value?: Date | string | null) => {
   if (!value) return null;
 
@@ -38,7 +45,7 @@ const normalizarNomeStatus = (nome?: string | null): StatusEvento | null => {
 
 const formatarJustificativasFinalizacao = (evento: EventoStatusInput) => {
   const motivos: string[] = [];
-  const agora = new Date();
+  const agora = agoraNoReferencialDoBanco();
   const dataMaximaInscricao = parseDate(evento.data_maxima_inscricao);
   const dataFim = parseDate(evento.data_fim);
 
@@ -73,7 +80,7 @@ export const calcularStatusEvento = (evento: EventoStatusInput): StatusEvento =>
     return statusAtual;
   }
 
-  const agora = new Date();
+  const agora = agoraNoReferencialDoBanco();
   const dataMaximaInscricao = parseDate(evento.data_maxima_inscricao);
   const dataFim = parseDate(evento.data_fim);
   const limiteInscricoes = evento.limite_inscricoes;
