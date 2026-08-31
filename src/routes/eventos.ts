@@ -9,6 +9,22 @@ import { enviarEmailQRCode } from '../helpers/email.js';
 const router = Router();
 const db = prisma as any;
 
+// Valida uma data no formato dd/mm/aaaa, conferindo se o dia existe no mes.
+function validateDataBRServer(data: string): boolean {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(data.trim());
+  if (!match) return false;
+
+  const dia = Number(match[1]);
+  const mes = Number(match[2]);
+  const ano = Number(match[3]);
+
+  if (mes < 1 || mes > 12) return false;
+  if (ano < 1900 || ano > 2200) return false;
+
+  const diasNoMes = new Date(ano, mes, 0).getDate();
+  return dia >= 1 && dia <= diasNoMes;
+}
+
 function validateCPFServer(cpf: string): boolean {
   if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
   let sum = 0;
@@ -612,6 +628,9 @@ router.post('/:eventoId/participantes', async (req, res) => {
             if (clean.length < 10 || clean.length > 11) {
               return res.status(400).json({ error: `"${campo.label}" deve ser um telefone válido.` });
             }
+          }
+          if (campo.tipo === 'data' && !validateDataBRServer(valorStr)) {
+            return res.status(400).json({ error: `"${campo.label}" deve ser uma data válida no formato dd/mm/aaaa.` });
           }
         }
 
