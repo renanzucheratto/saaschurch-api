@@ -93,6 +93,7 @@ model Area {
   transacoesBancarias TransacaoBancaria[]
   regrasConciliacao   RegraConciliacao[]
   ocorrencias         OcorrenciaArea[]
+  projetos            ProjetoArea[]
 
   @@index([instituicaoId])
   @@map("areas")
@@ -241,8 +242,8 @@ model RespostaCustomizada {
 }
 
 model StatusEvento {
-  id     String    @id @default(uuid())
-  nome   String    @unique
+  id      String    @id @default(uuid())
+  nome    String    @unique
   eventos Eventos[]
 
   @@map("status_eventos")
@@ -415,6 +416,7 @@ model Projeto {
   status         StatusProjeto? @relation(fields: [statusId], references: [id], onDelete: SetNull)
   itens          ItemProjeto[]
   anexos         AnexoProjeto[]
+  areas          ProjetoArea[]
 
   transacoesBancarias TransacaoBancaria[]
   regrasConciliacao   RegraConciliacao[]
@@ -423,6 +425,20 @@ model Projeto {
   @@index([liderUserId])
   @@index([statusId])
   @@map("projetos")
+}
+
+model ProjetoArea {
+  id        String   @id @default(uuid())
+  projetoId String
+  areaId    String
+  createdAt DateTime @default(now())
+
+  projeto Projeto @relation(fields: [projetoId], references: [id], onDelete: Cascade)
+  area    Area    @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  @@unique([projetoId, areaId])
+  @@index([areaId])
+  @@map("projetos_areas")
 }
 
 model ItemProjeto {

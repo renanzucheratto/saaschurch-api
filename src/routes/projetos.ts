@@ -35,11 +35,11 @@ const TRANSICOES: Record<
   string,
   { de: string[]; papeis: UserType[]; areasPermitidas: string[]; donoPermitido: boolean }
 > = {
-  aprovado: { de: ['em_analise'], papeis: ['backoffice'], areasPermitidas: ['pastores', 'tesouraria'], donoPermitido: false },
-  recusado: { de: ['em_analise'], papeis: ['backoffice'], areasPermitidas: ['pastores', 'tesouraria'], donoPermitido: false },
+  aprovado: { de: ['em_analise'], papeis: ['backoffice'], areasPermitidas: [], donoPermitido: false },
+  recusado: { de: ['em_analise'], papeis: ['backoffice'], areasPermitidas: [], donoPermitido: false },
   em_reembolso: { de: ['aprovado'], papeis: ['backoffice'], areasPermitidas: [], donoPermitido: true },
-  liquidado: { de: ['em_reembolso'], papeis: ['backoffice'], areasPermitidas: ['tesouraria'], donoPermitido: false },
-  finalizado: { de: ['liquidado'], papeis: ['backoffice'], areasPermitidas: ['tesouraria'], donoPermitido: false },
+  liquidado: { de: ['em_reembolso'], papeis: ['backoffice'], areasPermitidas: [], donoPermitido: false },
+  finalizado: { de: ['liquidado'], papeis: ['backoffice'], areasPermitidas: [], donoPermitido: true },
 };
 
 async function temPermissaoTransicao(
@@ -93,6 +93,7 @@ function serializarProjeto(projeto: any) {
       ? { id: projeto.lider.id, nome: projeto.lider.nome, email: projeto.lider.email }
       : null,
     status: projeto?.status ?? null,
+    areas: Array.isArray(projeto?.areas) ? projeto.areas.map((pa: any) => pa.area) : [],
     itens,
     anexos: Array.isArray(projeto?.anexos)
       ? projeto.anexos.map((a: any) => ({ ...a, createdAt: formatDateToBrasilia(a.createdAt) }))
@@ -105,6 +106,48 @@ function podeCriar(userType: UserType): boolean {
   return ['lider', 'backoffice'].includes(userType);
 }
 
+const INCLUDE_AREAS = {
+  include: { area: { select: { id: true, nome: true, cor: true } } },
+} as const;
+
+// Áreas em que o usuário é líder — sempre entram no projeto e não podem ser removidas.
+async function areasQueLidera(userId: string, instituicaoId: string): Promise<string[]> {
+  const vinculos = await db.userArea.findMany({
+    where: { userId, roleNaArea: 'lider', area: { instituicaoId } },
+    select: { areaId: true },
+  });
+  return vinculos.map((v: any) => v.areaId);
+}
+
+/**
+ * Monta a lista final de áreas do projeto. O backoffice escolhe livremente; o líder
+ * escolhe outras áreas, mas as que ele lidera são sempre incluídas.
+ */
+async function resolverAreasDoProjeto(
+  userId: string,
+  userType: UserType,
+  instituicaoId: string,
+  areaIds: unknown,
+): Promise<{ ids?: string[]; erro?: string }> {
+  const informadas = Array.isArray(areaIds) ? areaIds.filter((id) => typeof id === 'string') : [];
+
+  const obrigatorias =
+    userType === 'backoffice' ? [] : await areasQueLidera(userId, instituicaoId);
+
+  const ids = Array.from(new Set([...obrigatorias, ...informadas]));
+
+  if (ids.length === 0) {
+    return { erro: 'Selecione ao menos uma área para o projeto.' };
+  }
+
+  const validas = await db.area.count({ where: { id: { in: ids }, instituicaoId } });
+  if (validas !== ids.length) {
+    return { erro: 'Uma ou mais áreas selecionadas não pertencem à instituição.' };
+  }
+
+  return { ids };
+}
+
 // ==================== GET /projetos ====================
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
@@ -113,6 +156,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       include: {
         status: true,
         lider: { select: { id: true, nome: true, email: true } },
+        areas: INCLUDE_AREAS,
         itens: true,
       },
       orderBy: { createdAt: 'desc' },
@@ -132,7 +176,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Apenas líderes podem criar projetos.' });
     }
 
-    const { nome, descricao, ideias, data_inicio, data_fim, eventoId, itens } = req.body;
+    const { nome, descricao, ideias, data_inicio, data_fim, eventoId, itens, areaIds } = req.body;
 
     if (!nome) {
       return res.status(400).json({ error: 'O nome do projeto é obrigatório.' });
@@ -140,6 +184,16 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
     if (!Array.isArray(itens) || itens.length === 0) {
       return res.status(400).json({ error: 'O projeto deve conter ao menos um item.' });
+    }
+
+    const areas = await resolverAreasDoProjeto(
+      req.user!.id,
+      req.user!.userType,
+      req.user!.instituicaoId,
+      areaIds,
+    );
+    if (areas.erro) {
+      return res.status(400).json({ error: areas.erro });
     }
 
     const projeto = await db.projeto.create({
@@ -164,10 +218,14 @@ router.post('/', async (req: AuthRequest, res: Response) => {
             valor_unit: item.valor_unit ?? 0,
           })),
         },
+        areas: {
+          create: areas.ids!.map((areaId) => ({ areaId })),
+        },
       },
       include: {
         status: true,
         lider: { select: { id: true, nome: true, email: true } },
+        areas: INCLUDE_AREAS,
         itens: true,
         anexos: true,
       },
@@ -188,6 +246,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       include: {
         status: true,
         lider: { select: { id: true, nome: true, email: true } },
+        areas: INCLUDE_AREAS,
         itens: { orderBy: { createdAt: 'asc' } },
         anexos: { orderBy: { createdAt: 'asc' } },
       },
@@ -228,10 +287,24 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const { nome, descricao, ideias, data_inicio, data_fim, eventoId, itens } = req.body;
+    const { nome, descricao, ideias, data_inicio, data_fim, eventoId, itens, areaIds } = req.body;
 
     if (Array.isArray(itens) && itens.length === 0) {
       return res.status(400).json({ error: 'O projeto deve conter ao menos um item.' });
+    }
+
+    let areasDoProjeto: string[] | undefined;
+    if (areaIds !== undefined) {
+      const areas = await resolverAreasDoProjeto(
+        req.user!.id,
+        req.user!.userType,
+        req.user!.instituicaoId,
+        areaIds,
+      );
+      if (areas.erro) {
+        return res.status(400).json({ error: areas.erro });
+      }
+      areasDoProjeto = areas.ids;
     }
 
     const updated = await db.projeto.update({
@@ -244,6 +317,13 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
         ...(data_fim !== undefined && { data_fim: data_fim ? new Date(data_fim) : null }),
         ...(eventoId !== undefined && { eventoId: eventoId || null }),
         updatedByEmail: req.user!.email,
+        // Recria os vínculos de área quando enviados
+        ...(areasDoProjeto && {
+          areas: {
+            deleteMany: {},
+            create: areasDoProjeto.map((areaId) => ({ areaId })),
+          },
+        }),
         // Recria os itens quando enviados
         ...(Array.isArray(itens) && {
           itens: {
@@ -260,6 +340,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       include: {
         status: true,
         lider: { select: { id: true, nome: true, email: true } },
+        areas: INCLUDE_AREAS,
         itens: { orderBy: { createdAt: 'asc' } },
         anexos: { orderBy: { createdAt: 'asc' } },
       },
@@ -333,6 +414,7 @@ router.put('/:id/status', async (req: AuthRequest, res: Response) => {
       include: {
         status: true,
         lider: { select: { id: true, nome: true, email: true } },
+        areas: INCLUDE_AREAS,
         itens: { orderBy: { createdAt: 'asc' } },
         anexos: { orderBy: { createdAt: 'asc' } },
       },
